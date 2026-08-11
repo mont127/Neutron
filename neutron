@@ -259,42 +259,99 @@ cmd_scan() {
     done
 }
 
-# fetch a windows-only app's depots by flipping steam to windows just long
-# enough, then putting it back. experimental: the override is global while set,
-# so nothing else should update meanwhile. run 'download-restore' when done.
-cmd_download() {
-    local appid="" confirm=0 a
-    for a in "$@"; do
-        case "$a" in --confirm) confirm=1 ;; *) appid="$a" ;; esac
+# --- windows download via a temporary, contained platform override ----------
+
+# stop every installed game auto-updating so the windows override cant drag them
+# onto their windows depots; remember what each was so we can put it back
+freeze_updates() {
+    local f id cur
+    mkdir -p "$NEUTRON_HOME/update-freeze"
+    for f in "$STEAM/steamapps"/appmanifest_*.acf; do
+        [ -f "$f" ] || continue
+        id="$(basename "$f" | tr -dc 0-9)"
+        cur="$(sed -n 's/.*"AutoUpdateBehavior"[[:space:]]*"\([0-9]\)".*/\1/p' "$f" | head -1)"
+        [ -n "$cur" ] || cur=0
+        echo "$cur" > "$NEUTRON_HOME/update-freeze/$id"
+        grep -q '"AutoUpdateBehavior"' "$f" && \
+            sed -i '' 's/\("AutoUpdateBehavior"[[:space:]]*"\)[0-9]"/\11"/' "$f"
     done
-    [ -n "$appid" ] || die "usage: neutron download <appid> --confirm"
-    local verdict; verdict="$(game_verdict "$appid")"
-    [ "$verdict" = "windows-only" ] || \
-        die "appid $appid is '$verdict', not windows-only. neutron never pulls windows depots for a mac game."
-    steam_running && die "close steam first"
-    [ "$confirm" = 1 ] || \
-        die "this temporarily sets steam's platform to windows to fetch appid $appid, then you restore it. close steam and re-run with --confirm."
-    mkdir -p "$NEUTRON_HOME"
-    [ -f "$STEAM_DEV_CFG" ] && cp "$STEAM_DEV_CFG" "$NEUTRON_HOME/steam_dev.cfg.bak"
-    printf '@sSteamCmdForcePlatformType windows\n' >> "$STEAM_DEV_CFG"
-    note "set windows platform override (temporary)"
-    open -a Steam || true
-    open "steam://install/$appid" || true
-    echo "steam is fetching appid $appid for windows."
-    echo "when it finishes downloading, run:  neutron download-restore"
-    echo "do not let other games update while the override is set."
+    note "paused auto-updates for installed games"
 }
 
-cmd_download_restore() {
+thaw_updates() {
+    local c id f
+    [ -d "$NEUTRON_HOME/update-freeze" ] || return 0
+    for c in "$NEUTRON_HOME/update-freeze"/*; do
+        [ -f "$c" ] || continue
+        id="$(basename "$c")"; f="$STEAM/steamapps/appmanifest_$id.acf"
+        [ -f "$f" ] && sed -i '' "s/\(\"AutoUpdateBehavior\"[[:space:]]*\"\)[0-9]\"/\1$(cat "$c")\"/" "$f"
+    done
+    rm -rf "$NEUTRON_HOME/update-freeze"
+    note "restored auto-update settings"
+}
+
+override_on() {
+    [ -f "$STEAM_DEV_CFG" ] && cp "$STEAM_DEV_CFG" "$NEUTRON_HOME/steam_dev.cfg.bak"
+    printf '@sSteamCmdForcePlatformType windows\n' >> "$STEAM_DEV_CFG"
+    touch "$NEUTRON_HOME/.override-active"
+}
+
+override_off() {
     if [ -f "$NEUTRON_HOME/steam_dev.cfg.bak" ]; then
-        cp "$NEUTRON_HOME/steam_dev.cfg.bak" "$STEAM_DEV_CFG"
-        rm -f "$NEUTRON_HOME/steam_dev.cfg.bak"
-        note "restored steam_dev.cfg"
+        cp "$NEUTRON_HOME/steam_dev.cfg.bak" "$STEAM_DEV_CFG"; rm -f "$NEUTRON_HOME/steam_dev.cfg.bak"
     else
         rm -f "$STEAM_DEV_CFG"
-        note "removed the temporary steam_dev.cfg"
     fi
-    echo "steam platform restored to default. restart steam to apply."
+    rm -f "$NEUTRON_HOME/.override-active"
+}
+
+override_active() { [ -f "$NEUTRON_HOME/.override-active" ]; }
+
+game_installed() {
+    local f="$STEAM/steamapps/appmanifest_$1.acf" sf
+    [ -f "$f" ] || return 1
+    sf="$(sed -n 's/.*"StateFlags"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f" | head -1)"
+    [ "$sf" = 4 ]
+}
+
+# the one command: mac build -> steam installs it natively; no mac build ->
+# steam downloads the windows version, then neutron wires it to a Play button.
+cmd_get() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron get <appid>"
+    [ -f "$CONFIG" ] || die "run 'neutron install' first"
+    local verdict name
+    verdict="$(game_verdict "$appid")"
+    name="$(game_name "$appid")"
+
+    if [ "$verdict" = "native-ok" ]; then
+        open "steam://install/$appid" 2>/dev/null || true
+        echo "$name has a macOS build. Steam is installing the native version, nothing else to do."
+        return
+    fi
+
+    if override_active; then
+        steam_running && die "quit steam, then run: neutron get $appid"
+        if game_installed "$appid"; then
+            override_off
+            thaw_updates
+            backup_steam
+            wire_game "$appid"
+            echo "done. restart steam and launch \"$name (Neutron)\"."
+        else
+            echo "$name is still downloading in steam. when it finishes, quit steam and run: neutron get $appid"
+        fi
+        return
+    fi
+
+    steam_running && die "quit steam first, then run: neutron get $appid"
+    echo "$name has no macOS build, telling steam to download the Windows version."
+    freeze_updates
+    override_on
+    open -a Steam || true
+    sleep 3
+    open "steam://install/$appid" 2>/dev/null || true
+    echo "confirm the install in steam. when the download finishes, quit steam and run: neutron get $appid"
 }
 
 cmd_remove() {
@@ -322,6 +379,9 @@ cmd_uninstall() {
     local purge=0
     [ "${1:-}" = "--purge" ] && purge=1
     steam_running && die "close steam first, then re-run uninstall"
+    # if a 'get' was interrupted, put the platform + auto-updates back
+    override_active && { override_off; note "cleared leftover windows override"; }
+    thaw_updates
     if [ -d "$NEUTRON_HOME/steam-backup" ]; then
         local f rel dst
         for f in "$NEUTRON_HOME/steam-backup"/*; do
@@ -353,13 +413,12 @@ cmd_uninstall() {
 
 case "${1:-}" in
     install)          shift; cmd_install "$@" ;;
+    get)              shift; cmd_get "$@" ;;
     add)              shift; cmd_add "$@" ;;
     add-exe)          shift; cmd_add_exe "$@" ;;
     remove)           shift; cmd_remove "$@" ;;
     scan)             shift; cmd_scan "$@" ;;
-    download)         shift; cmd_download "$@" ;;
-    download-restore) shift; cmd_download_restore "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install [--all]|scan|add <appid> [--force]|remove <appid>|download <appid> --confirm|download-restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install [--all]|scan|get <appid>|add <appid> [--force]|add-exe <name> <exe> [appid]|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac

@@ -33,35 +33,39 @@ From a checkout (you supply your own wine build):
 
     NEUTRON_DEV_WINE=/path/to/wine/build64 ./neutron install
     ./neutron scan              # see what is native vs windows-only
-    ./neutron add <appid>       # wire a windows-only game; quit Steam first
+    ./neutron get <appid>       # get a game the right way (see below)
     ./neutron status
     ./neutron uninstall
 
-## installing a Windows-only game
+## getting a game
 
-macOS Steam will not download a Windows-only app's depots on its own. To fetch
-them, Steam's platform has to be pointed at Windows briefly:
+`neutron get <appid>` does one thing, the right way for the game:
 
-    ./neutron download <appid> --confirm    # quit Steam first
-    # let Steam finish the download, then:
-    ./neutron download-restore
+- if the app has a macOS build, it tells Steam to install the native version and
+  stops. macOS is always preferred.
+- if it is Windows-only, it tells Steam to download the Windows version, then
+  wires it to a Play button that runs through Neutron.
 
-`download` refuses anything that is not Windows-only, backs up `steam_dev.cfg`,
-sets the override, and starts the download; `download-restore` puts the platform
-back. It is experimental — the override is global while set, so don't let other
-games update in between, and restore as soon as the download is done.
+The Windows path needs Steam's platform pointed at Windows while it downloads.
+That setting is global, so before flipping it `get` pauses auto-updates on every
+other installed game (and restores them after) — otherwise Steam would pull their
+Windows depots too. It runs in two steps, both with Steam quit:
 
-Once the depots are in, `add <appid>` gives the game a Play button:
+    ./neutron get <appid>       # quit Steam; starts the windows download
+    # confirm the install in Steam, let it finish, quit Steam again
+    ./neutron get <appid>       # finishes: restores everything, wires the shortcut
 
-    ./neutron add <appid>       # quit Steam first, then restart it
+Then restart Steam and launch "`<name> (Neutron)`" from your library. The wire
+step finds the exe, drops a `steam_appid.txt` next to it so the game reports to
+the right app, and writes a non-Steam shortcut that runs it through `neutron-run`.
 
-`add` finds the game's exe, drops a `steam_appid.txt` next to it so it reports to
-the right app, and writes a non-Steam shortcut "`<name> (Neutron)`" that runs it
-through `neutron-run`. Restart Steam and it shows up in the library with Play.
+For a Windows game whose files are already on disk, skip the download:
 
-`add`/`remove` edit Steam's `localconfig.vdf`, so quit Steam before running them
-— it rewrites that file on exit. Originals are backed up under
-`~/Library/Application Support/Neutron/steam-backup`.
+    ./neutron add <appid>                       # it is in your Steam library
+    ./neutron add-exe "<name>" /path/to/game.exe [appid]   # anywhere else
+
+All of these edit Steam config, so quit Steam first; originals are backed up
+under `~/Library/Application Support/Neutron/steam-backup`.
 
 ## building the .app
 
