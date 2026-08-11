@@ -488,6 +488,14 @@ cmd_get() {
     echo "done. launch \"$name (Neutron)\" from your steam library."
 }
 
+# safety net: if a download run was interrupted hard, put steam back
+cmd_restore() {
+    override_active && note "cleared windows override"
+    override_off
+    thaw_updates
+    echo "steam is back to macOS mode. restart steam if it is running."
+}
+
 cmd_remove() {
     local appid="${1:-}"
     [ -n "$appid" ] || die "usage: neutron remove <appid>"
@@ -558,11 +566,12 @@ case "${1:-}" in
     enable)           shift; cmd_enable "$@" ;;
     disable)          shift; cmd_disable "$@" ;;
     get)              shift; cmd_get "$@" ;;
+    restore)          shift; cmd_restore "$@" ;;
     add)              shift; cmd_add "$@" ;;
     add-exe)          shift; cmd_add_exe "$@" ;;
     remove)           shift; cmd_remove "$@" ;;
     scan)             shift; cmd_scan "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac
