@@ -73,6 +73,20 @@ def neutronize(root, appid, shim):
     else:
         launches = config[i][2]
 
+    # a launch entry with no oslist matches every platform, so on a mac steam
+    # would offer BOTH the raw .exe and ours and ask the user which to run. pin
+    # the game's own entries to windows so only ours shows up here.
+    for t, key, entry in launches:
+        if t != MAP or key == LAUNCH_KEY:
+            continue
+        cfg = get(entry, "config")
+        if cfg is None:
+            cfg = []
+            entry.append((MAP, "config", cfg))
+        if not str(get(cfg, "oslist") or "").strip():
+            set_str(cfg, "oslist", "windows")
+            changed.append("launch %s pinned to windows (was any-platform)" % key)
+
     if find(launches, LAUNCH_KEY) < 0:
         entry = [
             (STR, "executable", shim),

@@ -1,34 +1,85 @@
 #!/bin/bash
-# steam launches this as the game's "macOS build". it finds the real windows exe
-# for the appid and hands it to neutron-run. steam runs it with the game's
-# install dir as the working directory.
+# Steam launches this as the game's "macOS build". It finds the windows exe that
+# Steam installed for this appid and hands it to neutron-run.
+#
+# Steam resolves the launch entry relative to the library the game landed in, so
+# a copy of this lives in every steam library's steamapps/common/Neutron Runtime.
+#
+# Settings come from Steam's own per-game LAUNCH OPTIONS box (so there is no
+# separate app to open), falling back to the global config:
+#     backend=dxmt      d3dmetal | dxmt | dxvk | opengl
+#     msync=0           1 (default) or 0
+#     esync=1
+#     hud=1             show the metal fps hud
+#     debug=1           verbose wine logging into the launch log
+# anything else is passed straight through to the game.
 set -uo pipefail
 
-NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+N="$HOME/Library/Application Support/Neutron"
 LOG="$HOME/Library/Logs/neutron-launch.log"
 mkdir -p "$(dirname "$LOG")"
 echo "$(date '+%F %T') args: $* cwd: $PWD" >> "$LOG"
 
 appid=""
+game_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --appid) appid="${2:-}"; shift 2 ;;
-        *) shift ;;
+        backend=*) export MNC_GAME_BACKEND="${1#backend=}"; shift ;;
+        msync=*)   export NEUTRON_MSYNC="${1#msync=}"; shift ;;
+        esync=*)   export NEUTRON_ESYNC="${1#esync=}"; shift ;;
+        hud=*)     export NEUTRON_HUD="${1#hud=}"; shift ;;
+        debug=*)   export NEUTRON_DEBUG="${1#debug=}"; shift ;;
+        *) game_args+=("$1"); shift ;;
     esac
 done
 
+# per-game settings written by "neutron set", then the global config
+[ -f "$N/games/.cfg/$appid" ] && . "$N/games/.cfg/$appid"
+
+steam_root="$HOME/Library/Application Support/Steam"
+
+libraries() {
+    echo "$steam_root"
+    sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
+        "$steam_root/steamapps/libraryfolders.vdf" 2>/dev/null
+}
+
+# ask steam where it put this appid: its own appmanifest names the install dir
+find_install_dir() {
+    local lib acf dir
+    while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        acf="$lib/steamapps/appmanifest_$appid.acf"
+        [ -f "$acf" ] || continue
+        dir="$(sed -n 's/.*"installdir"[[:space:]]*"\(.*\)".*/\1/p' "$acf" | head -1)"
+        [ -n "$dir" ] || continue
+        [ -d "$lib/steamapps/common/$dir" ] && { echo "$lib/steamapps/common/$dir"; return; }
+    done < <(libraries)
+    return 1
+}
+
+findexe() {
+    for p in "$N/app/src/findexe.py" "$N/src/findexe.py"; do
+        [ -f "$p" ] && { python3 "$p" "$1" 2>/dev/null; return; }
+    done
+}
+
 exe=""
-if [ -n "$appid" ] && [ -f "$NEUTRON_HOME/games/.map/$appid" ]; then
-    exe="$(head -1 "$NEUTRON_HOME/games/.map/$appid")"
-fi
+base="$(find_install_dir 2>/dev/null || true)"
+[ -z "$base" ] && [ -d "$PWD" ] && base="$PWD"
+[ -n "$base" ] && exe="$(findexe "$base")"
+
+# fall back to whatever neutron downloaded itself
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-    exe="$(python3 "$NEUTRON_HOME/src/findexe.py" "$PWD" 2>/dev/null)"
+    [ -f "$N/games/.map/$appid" ] && exe="$(head -1 "$N/games/.map/$appid")"
 fi
 
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-    echo "neutron-launch: no windows exe for appid ${appid:-?} in $PWD" >> "$LOG"
+    echo "neutron-launch: no windows exe for appid ${appid:-?} (looked in ${base:-nowhere})" >> "$LOG"
+    osascript -e 'display alert "Neutron" message "Could not find the game executable."' >/dev/null 2>&1 || true
     exit 1
 fi
 
-echo "launching $exe" >> "$LOG"
-exec "$NEUTRON_HOME/bin/neutron-run" "$exe" >> "$LOG" 2>&1
+echo "launching $exe  backend=${MNC_GAME_BACKEND:-default}" >> "$LOG"
+exec "$N/bin/neutron-run" "$exe" "${game_args[@]+"${game_args[@]}"}" >> "$LOG" 2>&1
