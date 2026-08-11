@@ -103,37 +103,52 @@ stage_bridge() {
 
 # --- steam launch options ----------------------------------------------------
 
-localconfigs() {
-    find "$STEAM/userdata" -maxdepth 3 -name localconfig.vdf 2>/dev/null
+configdirs() {
+    find "$STEAM/userdata" -maxdepth 2 -type d -name config 2>/dev/null
 }
 
+# give a windows-only game a Play button via a non-steam shortcut that runs it
+# through neutron-run. resolves the exe, drops steam_appid.txt so the game
+# reports to the right appid, and writes the shortcut for every steam user.
 wire_game() {
-    # set LaunchOptions for one appid in every user's localconfig.vdf
-    local appid="$1" opt="\"$BIN/neutron-run\" %command%" vdf wrote=0
-    while IFS= read -r vdf; do
-        [ -n "$vdf" ] || continue
-        python3 "$SELF_DIR/src/vdf_launchopt.py" set "$vdf" "$appid" "$opt" && wrote=1
-    done < <(localconfigs)
-    [ "$wrote" = 1 ] || die "appid $appid not found in any localconfig.vdf (has steam ever shown it?)"
+    local appid="$1" info base exe name cfg vdf wrote=0
+    info="$(PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/gameexe.py" "$STEAM" "$appid")" || \
+        die "appid $appid is not installed (download its windows depots first: neutron download $appid --confirm)"
+    base="${info%%|*}"; name="${info##*|}"; exe="${info#*|}"; exe="${exe%|*}"
+    [ -n "$exe" ] && [ -f "$exe" ] || die "could not find the windows exe for $appid under $base"
+    echo "$appid" > "$(dirname "$exe")/steam_appid.txt"
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        vdf="$cfg/shortcuts.vdf"
+        python3 "$SELF_DIR/src/shortcuts.py" add "$vdf" "$name (Neutron)" \
+            "\"$BIN/neutron-run\"" "$base" "\"$exe\"" && wrote=1
+    done < <(configdirs)
+    [ "$wrote" = 1 ] || die "no steam user config dir found"
+    note "shortcut: $name (Neutron) -> $exe"
 }
 
 unwire_game() {
-    local appid="$1" vdf
-    while IFS= read -r vdf; do
-        [ -n "$vdf" ] || continue
-        python3 "$SELF_DIR/src/vdf_launchopt.py" clear "$vdf" "$appid" || true
-    done < <(localconfigs)
+    local appid="$1" info name cfg
+    info="$(PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/gameexe.py" "$STEAM" "$appid" 2>/dev/null)" || return 0
+    name="${info##*|}"
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        python3 "$SELF_DIR/src/shortcuts.py" remove "$cfg/shortcuts.vdf" "$name (Neutron)" || true
+    done < <(configdirs)
 }
 
 backup_steam() {
-    local vdf rel
+    local cfg f rel
     mkdir -p "$NEUTRON_HOME/steam-backup"
-    while IFS= read -r vdf; do
-        [ -n "$vdf" ] || continue
-        rel="$(echo "$vdf" | sed "s#$STEAM/##; s#/#_#g")"
-        [ -f "$NEUTRON_HOME/steam-backup/$rel" ] || cp "$vdf" "$NEUTRON_HOME/steam-backup/$rel"
-    done < <(localconfigs)
-    note "backed up steam localconfig(s)"
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        for f in "$cfg/localconfig.vdf" "$cfg/shortcuts.vdf"; do
+            [ -f "$f" ] || continue
+            rel="$(echo "$f" | sed "s#$STEAM/##; s#/#_#g")"
+            [ -f "$NEUTRON_HOME/steam-backup/$rel" ] || cp "$f" "$NEUTRON_HOME/steam-backup/$rel"
+        done
+    done < <(configdirs)
+    note "backed up steam config"
 }
 
 # --- classification: prefer macos, neutron only for windows-only -------------
@@ -208,8 +223,10 @@ cmd_add() {
     steam_running && die "close steam first (it rewrites its config on exit)"
     backup_steam
     wire_game "$appid"
-    echo "wired appid $appid -> neutron-run. launch it from steam."
+    echo "added. restart steam and launch \"$(game_name "$appid") (Neutron)\" from your library."
 }
+
+game_name() { classify "$1" | head -1 | cut -d'|' -f4; }
 
 cmd_scan() {
     echo "installed games (macOS preferred, neutron handles windows-only):"
@@ -274,12 +291,12 @@ cmd_status() {
     [ -f "$CONFIG" ] && { echo "installed:"; sed 's/^/  /' "$CONFIG"; } || echo "  not installed"
     [ -x "$BIN/neutron-run" ] && note "runner: $BIN/neutron-run"
     [ -f "$BIN/steam.exe" ] && note "stub:   $BIN/steam.exe"
-    local vdf
-    while IFS= read -r vdf; do
-        [ -n "$vdf" ] || continue
-        note "wired in $(basename "$(dirname "$(dirname "$vdf")")"):"
-        python3 "$SELF_DIR/src/vdf_launchopt.py" list "$vdf" | sed 's/^/    /' || true
-    done < <(localconfigs)
+    local cfg
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        note "shortcuts in $(basename "$(dirname "$cfg")"):"
+        python3 "$SELF_DIR/src/shortcuts.py" list "$cfg/shortcuts.vdf" 2>/dev/null | sed 's/^/    /' || true
+    done < <(configdirs)
 }
 
 cmd_uninstall() {
@@ -295,6 +312,12 @@ cmd_uninstall() {
             [ -f "$dst" ] && cp "$f" "$dst" && note "restored $rel"
         done
     fi
+    local cfg
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        python3 "$SELF_DIR/src/shortcuts.py" clean "$cfg/shortcuts.vdf" 2>/dev/null || true
+    done < <(configdirs)
+    note "removed neutron shortcuts"
     local wine
     wine="$(. "$CONFIG" 2>/dev/null; echo "${NEUTRON_WINE:-}")"
     if [ -n "$wine" ]; then

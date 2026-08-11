@@ -51,6 +51,14 @@ sets the override, and starts the download; `download-restore` puts the platform
 back. It is experimental — the override is global while set, so don't let other
 games update in between, and restore as soon as the download is done.
 
+Once the depots are in, `add <appid>` gives the game a Play button:
+
+    ./neutron add <appid>       # quit Steam first, then restart it
+
+`add` finds the game's exe, drops a `steam_appid.txt` next to it so it reports to
+the right app, and writes a non-Steam shortcut "`<name> (Neutron)`" that runs it
+through `neutron-run`. Restart Steam and it shows up in the library with Play.
+
 `add`/`remove` edit Steam's `localconfig.vdf`, so quit Steam before running them
 — it rewrites that file on exit. Originals are backed up under
 `~/Library/Application Support/Neutron/steam-backup`.
@@ -72,7 +80,8 @@ no compiler.
     src/steam_stub.c   the stub steam.exe
     src/appinfo.py     reads appinfo.vdf: native-mac vs windows-only
     src/classify.py    per-app verdict + action over the installed library
-    src/vdf_launchopt.py   sets/clears LaunchOptions in localconfig.vdf
+    src/gameexe.py     resolves an installed app to its windows exe
+    src/shortcuts.py   adds/removes non-steam shortcuts in shortcuts.vdf
     test/              standalone bringup checks (dev)
 
 ## the bridge
@@ -85,7 +94,6 @@ tree, not here, and ships inside the unified wine. Build it with
 ## limits
 
 - 64-bit games. The 32-bit side builds but has no wow64 thunks yet.
-- Steam shows a Play button for a Windows-only title only once it has a macOS
-  launch entry. Games already present for macOS, or installed via the
-  platform-override trick, launch cleanly; injecting that entry for a pure
-  Windows-only app is not automated here yet.
+- A Windows-only game must be downloaded first, which needs Steam's platform
+  briefly set to Windows (see `download` above). Don't let native Mac games
+  update while that override is on, or Steam pulls their Windows depots too.
