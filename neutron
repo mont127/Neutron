@@ -19,6 +19,9 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 STEAM="$HOME_DIR/Library/Application Support/Steam"
 STEAM_DEV_CFG="$STEAM/steam_dev.cfg"
+COMPAT_DIR="$STEAM/compatibilitytools.d/neutron"
+REGISTRY="$STEAM/registry.vdf"
+TOOL_NAME="neutron"
 DEPLOYED_WINE="$NEUTRON_HOME/wine-unified"
 DEPS_WINE="$HOME_DIR/Library/Application Support/MacNCheese/deps/wine-unified"
 # only for local dev against a wine build tree; the shipped app never uses it
@@ -99,6 +102,59 @@ stage_bridge() {
     [ -f "$src/i386-windows/lsteamclient.dll" ] && \
         cp "$src/i386-windows/lsteamclient.dll" "$prefix/drive_c/windows/syswow64/lsteamclient.dll"
     note "staged bridge into prefix"
+}
+
+# --- steam play compatibility tool -------------------------------------------
+# this is how proton does it: register a compat tool, then map it in the
+# registry. steam then offers Install for windows-only titles and launches them
+# through us, no platform override and no shortcuts needed.
+
+install_compat_tool() {
+    mkdir -p "$COMPAT_DIR"
+    cp "$SELF_DIR/src/compat-entry" "$COMPAT_DIR/compat-entry"
+    chmod +x "$COMPAT_DIR/compat-entry"
+
+    cat > "$COMPAT_DIR/compatibilitytool.vdf" <<EOF
+"compatibilitytools"
+{
+	"compat_tools"
+	{
+		"$TOOL_NAME"
+		{
+			"install_path"	"."
+			"display_name"	"Neutron"
+			"from_oslist"	"windows"
+			"to_oslist"	"macos"
+		}
+	}
+}
+EOF
+
+    cat > "$COMPAT_DIR/toolmanifest.vdf" <<'EOF'
+"manifest"
+{
+	"version"	"2"
+	"commandline"	"/compat-entry %verb%"
+	"compatmanager_layer_name"	"neutron"
+}
+EOF
+    note "registered steam play tool in $COMPAT_DIR"
+}
+
+# appid 0 is the global default: every windows-only title becomes installable
+map_compat_tool() {
+    local appid="${1:-0}"
+    [ -f "$REGISTRY" ] || die "no registry.vdf, has steam ever run?"
+    cp "$REGISTRY" "$NEUTRON_HOME/registry.vdf.bak" 2>/dev/null || true
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/compatmap.py" set "$REGISTRY" "$appid" "$TOOL_NAME" \
+        || die "could not write CompatToolMapping"
+    [ "$appid" = 0 ] && note "steam play enabled for all windows titles" \
+                     || note "steam play enabled for appid $appid"
+}
+
+unmap_compat_tool() {
+    local appid="${1:-0}"
+    [ -f "$REGISTRY" ] && PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/compatmap.py" clear "$REGISTRY" "$appid" || true
 }
 
 # --- steam launch options ----------------------------------------------------
@@ -198,15 +254,17 @@ EOF
     note "wrote $CONFIG"
 
     backup_steam
-    if [ "$all" = 1 ]; then
-        steam_running && die "close steam first, then re-run (steam rewrites its config on exit)"
-        local id
-        while IFS= read -r id; do
-            [ -n "$id" ] || continue
-            if wire_game "$id" 2>/dev/null; then note "wired appid $id"; fi
-        done < <(installed_windows_games)
+    install_compat_tool
+    if steam_running; then
+        echo
+        echo "installed, but steam is running so the compat tool isnt enabled yet."
+        echo "quit steam and run:  neutron enable"
+    else
+        map_compat_tool 0
+        echo
+        echo "done. start steam: windows-only games now have an Install button and"
+        echo "launch through neutron."
     fi
-    echo "done. add a game with: neutron add <appid>  (steam must be closed)"
 }
 
 cmd_add() {
@@ -227,6 +285,20 @@ cmd_add() {
 }
 
 game_name() { classify "$1" | head -1 | cut -d'|' -f4; }
+
+cmd_enable() {
+    [ -f "$CONFIG" ] || die "run 'neutron install' first"
+    steam_running && die "quit steam first, then run: neutron enable"
+    [ -d "$COMPAT_DIR" ] || install_compat_tool
+    map_compat_tool "${1:-0}"
+    echo "start steam. windows-only games now show Install and run through neutron."
+}
+
+cmd_disable() {
+    steam_running && die "quit steam first, then run: neutron disable"
+    unmap_compat_tool "${1:-0}"
+    echo "steam play mapping removed. restart steam."
+}
 
 # wire any windows exe (not necessarily in the steam library) to a Play button
 cmd_add_exe() {
@@ -367,6 +439,11 @@ cmd_status() {
     [ -f "$CONFIG" ] && { echo "installed:"; sed 's/^/  /' "$CONFIG"; } || echo "  not installed"
     [ -x "$BIN/neutron-run" ] && note "runner: $BIN/neutron-run"
     [ -f "$BIN/steam.exe" ] && note "stub:   $BIN/steam.exe"
+    [ -d "$COMPAT_DIR" ] && note "steam play tool: $COMPAT_DIR" || note "steam play tool: not installed"
+    if [ -f "$REGISTRY" ]; then
+        note "compat mapping:"
+        PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/compatmap.py" list "$REGISTRY" 2>/dev/null | sed 's/^/    /' || true
+    fi
     local cfg
     while IFS= read -r cfg; do
         [ -n "$cfg" ] || continue
@@ -382,6 +459,9 @@ cmd_uninstall() {
     # if a 'get' was interrupted, put the platform + auto-updates back
     override_active && { override_off; note "cleared leftover windows override"; }
     thaw_updates
+    unmap_compat_tool 0
+    rm -rf "$COMPAT_DIR"
+    note "removed steam play tool"
     if [ -d "$NEUTRON_HOME/steam-backup" ]; then
         local f rel dst
         for f in "$NEUTRON_HOME/steam-backup"/*; do
@@ -413,6 +493,8 @@ cmd_uninstall() {
 
 case "${1:-}" in
     install)          shift; cmd_install "$@" ;;
+    enable)           shift; cmd_enable "$@" ;;
+    disable)          shift; cmd_disable "$@" ;;
     get)              shift; cmd_get "$@" ;;
     add)              shift; cmd_add "$@" ;;
     add-exe)          shift; cmd_add_exe "$@" ;;
@@ -420,5 +502,5 @@ case "${1:-}" in
     scan)             shift; cmd_scan "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install [--all]|scan|get <appid>|add <appid> [--force]|add-exe <name> <exe> [appid]|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac

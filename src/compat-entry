@@ -1,0 +1,27 @@
+#!/bin/bash
+# steam play entry point. steam calls this the same way it calls proton:
+#   compat-entry <verb> <command...>
+# verb is run / waitforexitandrun / getcompatpath / getnativepath.
+# we hand the command to neutron-run, which sets up wine + the bridge.
+set -euo pipefail
+
+NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+RUN="$NEUTRON_HOME/bin/neutron-run"
+LOG="$HOME/Library/Logs/neutron-compat.log"
+mkdir -p "$(dirname "$LOG")"
+
+verb="${1:-run}"; shift || true
+echo "$(date '+%F %T') verb=$verb args=$*" >> "$LOG"
+
+case "$verb" in
+    getcompatpath|getnativepath)
+        # steam asks us to translate a path; we share the filesystem, so echo it
+        echo "${1:-}"
+        exit 0
+        ;;
+esac
+
+[ -x "$RUN" ] || { echo "neutron-run missing, run the neutron installer" >&2; exit 1; }
+[ $# -ge 1 ] || { echo "no command from steam" >&2; exit 2; }
+
+exec "$RUN" "$@" >> "$LOG" 2>&1
