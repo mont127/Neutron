@@ -36,6 +36,7 @@ final class Neutron: ObservableObject {
     @Published var games: [Game] = []
     @Published var busy = false
     @Published var busyAppid: String?
+    @Published var playing: String?
     @Published var logLines: [String] = []
     @Published var loadFailed: String?
 
@@ -49,22 +50,28 @@ final class Neutron: ObservableObject {
         return (("~/Neutron-repo/neutron") as NSString).expandingTildeInPath
     }
 
-    func installedNames() -> Set<String> {
-        let items = (try? FileManager.default.contentsOfDirectory(atPath: gamesDir)) ?? []
-        return Set(items)
+    // the exe we installed for an appid, if any
+    func exePath(_ appid: String) -> String? {
+        let map = gamesDir + "/.map/" + appid
+        if let s = try? String(contentsOfFile: map, encoding: .utf8) {
+            let p = s.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !p.isEmpty && FileManager.default.isReadableFile(atPath: p) { return p }
+        }
+        return nil
     }
 
     func reload() {
         loadFailed = nil
         DispatchQueue.global().async {
             let out = self.run(self.script, ["scan-machine"])
-            let present = self.installedNames()
             var parsed: [Game] = []
             for line in out.split(separator: "\n") {
                 let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-                guard f.count >= 4 else { continue }
-                parsed.append(Game(appid: f[0], name: f[3], verdict: f[1],
-                                   installed: present.contains(f[3])))
+                guard f.count >= 5 else { continue }
+                // installed for us means: we have a windows exe to launch
+                let ours = self.exePath(f[0]) != nil
+                parsed.append(Game(appid: f[0], name: f[4], verdict: f[1],
+                                   installed: ours || (f[1] == "native-ok" && f[3] == "1")))
             }
             let sorted = parsed.sorted {
                 if $0.isWindows != $1.isWindows { return $0.isWindows }
@@ -93,6 +100,25 @@ final class Neutron: ObservableObject {
                 self.busy = false
                 self.busyAppid = nil
                 self.reload()
+            }
+        }
+    }
+
+    func play(_ game: Game) {
+        guard let exe = exePath(game.appid) else { return }
+        playing = game.appid
+        logLines = ["Launching \(game.name)…"]
+        DispatchQueue.global().async {
+            let runner = ("~/Library/Application Support/Neutron/bin/neutron-run" as NSString).expandingTildeInPath
+            self.stream(runner, [exe]) { line in
+                DispatchQueue.main.async {
+                    self.logLines.append(line)
+                    if self.logLines.count > 400 { self.logLines.removeFirst() }
+                }
+            }
+            DispatchQueue.main.async {
+                self.playing = nil
+                self.logLines.append("\(game.name) exited.")
             }
         }
     }
@@ -166,7 +192,9 @@ struct Row: View {
     let game: Game
     let art: NSImage?
     let busy: Bool
+    let playing: Bool
     let onInstall: () -> Void
+    let onPlay: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -179,8 +207,19 @@ struct Row: View {
             if game.verdict == "native-ok" {
                 Text("Steam handles it").font(.system(size: 11)).foregroundStyle(.tertiary)
             } else if game.installed {
-                Label("In your library", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 11)).foregroundStyle(.green).labelStyle(.titleAndIcon)
+                if playing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Running").font(.system(size: 11)).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button {
+                        onPlay()
+                    } label: {
+                        Label("Play", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.small).tint(.green)
+                }
             } else if busy {
                 ProgressView().controlSize(.small)
             } else {
@@ -229,14 +268,18 @@ struct ContentView: View {
                         Section("Runs through Neutron") {
                             ForEach(filtered(windowsGames)) { g in
                                 Row(game: g, art: n.artwork(g.appid),
-                                    busy: n.busyAppid == g.appid) { n.install(g) }
+                                    busy: n.busyAppid == g.appid,
+                                    playing: n.playing == g.appid,
+                                    onInstall: { n.install(g) },
+                                    onPlay: { n.play(g) })
                             }
                         }
                     }
                     if !filtered(macGames).isEmpty {
                         Section("Native macOS — Steam runs these itself") {
                             ForEach(filtered(macGames)) { g in
-                                Row(game: g, art: n.artwork(g.appid), busy: false) { }
+                                Row(game: g, art: n.artwork(g.appid), busy: false,
+                                    playing: false, onInstall: {}, onPlay: {})
                             }
                         }
                     }

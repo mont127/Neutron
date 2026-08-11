@@ -1,0 +1,29 @@
+#!/bin/bash
+# what a Steam shortcut actually runs. one button in Steam does everything:
+# if the windows game isnt downloaded yet, fetch it through the running steam
+# client (no restart, no platform override), then launch it under wine.
+set -uo pipefail
+
+N="$HOME/Library/Application Support/Neutron"
+LOG="$HOME/Library/Logs/neutron-play.log"
+mkdir -p "$(dirname "$LOG")"
+
+appid="${1:-}"
+[ -n "$appid" ] || { echo "usage: neutron-play <appid>" >&2; exit 2; }
+echo "$(date '+%F %T') play $appid" >> "$LOG"
+
+map="$N/games/.map/$appid"
+exe=""
+[ -f "$map" ] && exe="$(head -1 "$map" 2>/dev/null)"
+
+if [ -z "$exe" ] || [ ! -f "$exe" ]; then
+    osascript -e "display notification \"Downloading…\" with title \"Neutron\"" >/dev/null 2>&1 || true
+    if ! "$N/app/neutron" get-live "$appid" >> "$LOG" 2>&1; then
+        osascript -e "display notification \"Install failed - see neutron-play.log\" with title \"Neutron\"" >/dev/null 2>&1 || true
+        exit 1
+    fi
+    exe="$(head -1 "$map" 2>/dev/null)"
+fi
+
+[ -n "$exe" ] && [ -f "$exe" ] || { echo "no exe after install" >> "$LOG"; exit 1; }
+exec "$N/bin/neutron-run" "$exe" >> "$LOG" 2>&1

@@ -138,8 +138,11 @@ def main(argv):
         return 0
 
     if action == "clean":
-        # drop everything we added, leave the user's own shortcuts alone
-        kept = [s for s in shortcuts if not s.get("AppName", "").endswith(" (Neutron)")]
+        # ours are the ones launched through neutron; leave the user's alone
+        def ours(s):
+            e = s.get("Exe", "")
+            return "neutron-play" in e or "neutron-run" in e
+        kept = [s for s in shortcuts if not ours(s)]
         if len(kept) != len(shortcuts):
             write(path, kept)
         return 0

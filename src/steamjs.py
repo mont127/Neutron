@@ -148,9 +148,13 @@ def main(argv):
     if action == "evalfile":
         with open(argv[2], encoding="utf-8") as f:
             js = f.read()
-        # evalfile <file> [appid] - substitutes __APPID__
+        # evalfile <file> [appid [depot [manifest]]] - simple placeholder subst
         if len(argv) > 3:
             js = js.replace("__APPID__", str(int(argv[3])))
+        if len(argv) > 4:
+            js = js.replace("__DEPOT__", str(int(argv[4])))
+        if len(argv) > 5:
+            js = js.replace("__MANIFEST__", str(argv[5]))
         res = evaluate(js)
         val = res.get("result", {}).get("value")
         print(val if val is not None else json.dumps(res, indent=1)[:4000])
