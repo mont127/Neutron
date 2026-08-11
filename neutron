@@ -18,6 +18,7 @@ PREFIX_DEFAULT="$NEUTRON_HOME/prefix"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 STEAM="$HOME_DIR/Library/Application Support/Steam"
+STEAM_DEV_CFG="$STEAM/steam_dev.cfg"
 DEPLOYED_WINE="$NEUTRON_HOME/wine-unified"
 DEPS_WINE="$HOME_DIR/Library/Application Support/MacNCheese/deps/wine-unified"
 # only for local dev against a wine build tree; the shipped app never uses it
@@ -135,31 +136,16 @@ backup_steam() {
     note "backed up steam localconfig(s)"
 }
 
-# --- windows-only game discovery ---------------------------------------------
+# --- classification: prefer macos, neutron only for windows-only -------------
+
+classify() {
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/classify.py" "$STEAM" "$@"
+}
+
+game_verdict() { classify "$1" | head -1 | cut -d'|' -f2; }
 
 installed_windows_games() {
-    PYTHONPATH="$SELF_DIR/src" python3 - "$STEAM" <<'PY'
-import sys, os, re, glob
-steam = sys.argv[1]
-try:
-    import appinfo
-except Exception:
-    appinfo = None
-ids = []
-for acf in glob.glob(os.path.join(steam, "steamapps", "appmanifest_*.acf")):
-    m = re.search(r'appmanifest_(\d+)\.acf', acf)
-    if m:
-        ids.append(int(m.group(1)))
-if appinfo:
-    apps = appinfo.load_appinfo(only_appids=set(ids))
-    for i in sorted(ids):
-        a = apps.get(i)
-        if (appinfo.assess_macos_build(a)[0] if a else "windows-only") == "windows-only":
-            print(i)
-else:
-    for i in sorted(ids):
-        print(i)
-PY
+    classify | awk -F'|' '$2 == "windows-only" { print $1 }'
 }
 
 # --- subcommands -------------------------------------------------------------
@@ -209,13 +195,70 @@ EOF
 }
 
 cmd_add() {
-    local appid="${1:-}"
-    [ -n "$appid" ] || die "usage: neutron add <appid>"
+    local appid="" force=0 a
+    for a in "$@"; do
+        case "$a" in --force) force=1 ;; *) appid="$a" ;; esac
+    done
+    [ -n "$appid" ] || die "usage: neutron add <appid> [--force]"
     [ -f "$CONFIG" ] || die "run 'neutron install' first"
+    local verdict; verdict="$(game_verdict "$appid")"
+    if [ "$verdict" = "native-ok" ] && [ "$force" != 1 ]; then
+        die "appid $appid has a macOS build, Steam runs it natively. use --force to route it through neutron anyway."
+    fi
     steam_running && die "close steam first (it rewrites its config on exit)"
     backup_steam
     wire_game "$appid"
     echo "wired appid $appid -> neutron-run. launch it from steam."
+}
+
+cmd_scan() {
+    echo "installed games (macOS preferred, neutron handles windows-only):"
+    classify | while IFS='|' read -r id verdict action name; do
+        case "$action" in
+            macos)   printf "  native mac   %-9s %s\n" "$id" "$name" ;;
+            neutron) printf "  neutron      %-9s %s\n" "$id" "$name" ;;
+            review)  printf "  review       %-9s %s (stale mac build?)\n" "$id" "$name" ;;
+            *)       printf "  unknown      %-9s %s\n" "$id" "$name" ;;
+        esac
+    done
+}
+
+# fetch a windows-only app's depots by flipping steam to windows just long
+# enough, then putting it back. experimental: the override is global while set,
+# so nothing else should update meanwhile. run 'download-restore' when done.
+cmd_download() {
+    local appid="" confirm=0 a
+    for a in "$@"; do
+        case "$a" in --confirm) confirm=1 ;; *) appid="$a" ;; esac
+    done
+    [ -n "$appid" ] || die "usage: neutron download <appid> --confirm"
+    local verdict; verdict="$(game_verdict "$appid")"
+    [ "$verdict" = "windows-only" ] || \
+        die "appid $appid is '$verdict', not windows-only. neutron never pulls windows depots for a mac game."
+    steam_running && die "close steam first"
+    [ "$confirm" = 1 ] || \
+        die "this temporarily sets steam's platform to windows to fetch appid $appid, then you restore it. close steam and re-run with --confirm."
+    mkdir -p "$NEUTRON_HOME"
+    [ -f "$STEAM_DEV_CFG" ] && cp "$STEAM_DEV_CFG" "$NEUTRON_HOME/steam_dev.cfg.bak"
+    printf '@sSteamCmdForcePlatformType windows\n' >> "$STEAM_DEV_CFG"
+    note "set windows platform override (temporary)"
+    open -a Steam || true
+    open "steam://install/$appid" || true
+    echo "steam is fetching appid $appid for windows."
+    echo "when it finishes downloading, run:  neutron download-restore"
+    echo "do not let other games update while the override is set."
+}
+
+cmd_download_restore() {
+    if [ -f "$NEUTRON_HOME/steam_dev.cfg.bak" ]; then
+        cp "$NEUTRON_HOME/steam_dev.cfg.bak" "$STEAM_DEV_CFG"
+        rm -f "$NEUTRON_HOME/steam_dev.cfg.bak"
+        note "restored steam_dev.cfg"
+    else
+        rm -f "$STEAM_DEV_CFG"
+        note "removed the temporary steam_dev.cfg"
+    fi
+    echo "steam platform restored to default. restart steam to apply."
 }
 
 cmd_remove() {
@@ -267,10 +310,13 @@ cmd_uninstall() {
 }
 
 case "${1:-}" in
-    install)   shift; cmd_install "$@" ;;
-    add)       shift; cmd_add "$@" ;;
-    remove)    shift; cmd_remove "$@" ;;
-    status)    shift; cmd_status "$@" ;;
-    uninstall) shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install [--all]|add <appid>|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
+    install)          shift; cmd_install "$@" ;;
+    add)              shift; cmd_add "$@" ;;
+    remove)           shift; cmd_remove "$@" ;;
+    scan)             shift; cmd_scan "$@" ;;
+    download)         shift; cmd_download "$@" ;;
+    download-restore) shift; cmd_download_restore "$@" ;;
+    status)           shift; cmd_status "$@" ;;
+    uninstall)        shift; cmd_uninstall "$@" ;;
+    *) echo "usage: neutron {install [--all]|scan|add <appid> [--force]|remove <appid>|download <appid> --confirm|download-restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac

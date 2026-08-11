@@ -12,6 +12,18 @@ runs a shim that launches the game under wine.
 This repo is the installer only. The unified wine engine is shipped separately
 inside a `.app` bundle and is not part of this source tree.
 
+## the policy: macOS first, Neutron for the rest
+
+macOS Steam already downloads and runs a game's macOS build whenever it has one,
+so Neutron never touches those — it leaves them to Steam. It only handles
+Windows-only titles. It never forces Steam's platform to Windows globally, which
+would drag native Mac games onto their Windows depots.
+
+    neutron scan     classify installed games: native mac (Steam) vs neutron
+
+`add` refuses a game that has a macOS build unless you pass `--force`, and
+`install --all` wires only the Windows-only ones.
+
 ## install
 
 The normal way is the `.app`: double-click it, click Install. It deploys the
@@ -20,9 +32,24 @@ bundled wine and wires up the runtime.
 From a checkout (you supply your own wine build):
 
     NEUTRON_DEV_WINE=/path/to/wine/build64 ./neutron install
-    ./neutron add <appid>       # quit Steam first
+    ./neutron scan              # see what is native vs windows-only
+    ./neutron add <appid>       # wire a windows-only game; quit Steam first
     ./neutron status
     ./neutron uninstall
+
+## installing a Windows-only game
+
+macOS Steam will not download a Windows-only app's depots on its own. To fetch
+them, Steam's platform has to be pointed at Windows briefly:
+
+    ./neutron download <appid> --confirm    # quit Steam first
+    # let Steam finish the download, then:
+    ./neutron download-restore
+
+`download` refuses anything that is not Windows-only, backs up `steam_dev.cfg`,
+sets the override, and starts the download; `download-restore` puts the platform
+back. It is experimental — the override is global while set, so don't let other
+games update in between, and restore as soon as the download is done.
 
 `add`/`remove` edit Steam's `localconfig.vdf`, so quit Steam before running them
 — it rewrites that file on exit. Originals are backed up under
@@ -44,6 +71,7 @@ no compiler.
     build-app.sh       wraps the installer + a private wine into a .app
     src/steam_stub.c   the stub steam.exe
     src/appinfo.py     reads appinfo.vdf: native-mac vs windows-only
+    src/classify.py    per-app verdict + action over the installed library
     src/vdf_launchopt.py   sets/clears LaunchOptions in localconfig.vdf
     test/              standalone bringup checks (dev)
 
