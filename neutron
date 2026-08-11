@@ -104,6 +104,30 @@ stage_bridge() {
     note "staged bridge into prefix"
 }
 
+# --- graphics dlls ------------------------------------------------------------
+# the unified wine ships its d3d builtins DISABLED and expects the real ones
+# staged into the prefix from mnc-d3d; the loader then routes each process to the
+# right variant. without this every dx game fails to start with error 126.
+
+d3d_pack_dir() {
+    local wine="$1"
+    for d in "$wine/mnc-d3d" "$(dirname "$wine")/mnc-d3d"; do
+        [ -d "$d" ] && { echo "$d"; return; }
+    done
+    return 1
+}
+
+stage_d3d() {
+    local wine="$1" prefix="$2" pack sys32 n=0 f
+    pack="$(d3d_pack_dir "$wine")" || { note "no mnc-d3d pack, dx games will not start"; return 0; }
+    sys32="$prefix/drive_c/windows/system32"
+    for f in "$pack"/*.dll; do
+        [ -f "$f" ] || continue
+        cp "$f" "$sys32/$(basename "$f")" && n=$((n + 1))
+    done
+    note "staged $n graphics dlls from $(basename "$pack")"
+}
+
 # --- steam play compatibility tool -------------------------------------------
 # this is how proton does it: register a compat tool, then map it in the
 # registry. steam then offers Install for windows-only titles and launches them
@@ -166,12 +190,24 @@ depot_staging_dir() {
     echo "$STEAM/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_$1/depot_$2"
 }
 
+# console_log.txt is months deep and never truncated, so only look at lines
+# written AFTER we asked for this depot - otherwise an old "complete" line makes
+# every re-download look instantly finished.
+# usage: wait_for_depot <appid> <depot> <log-lines-before-we-started> [cap]
 wait_for_depot() {
-    local appid="$1" depot="$2" cap="${3:-7200}" waited=0 log="$STEAM/logs/console_log.txt" dir
+    local appid="$1" depot="$2" tail_from="${3:-0}" cap="${4:-7200}" waited=0
+    local log="$STEAM/logs/console_log.txt" dir new
     dir="$(depot_staging_dir "$appid" "$depot")"
     while [ "$waited" -lt "$cap" ]; do
-        if grep -aq "Depot download complete.*depot_$depot" "$log" 2>/dev/null; then echo; return 0; fi
-        if grep -aq "Failed to download depot $depot" "$log" 2>/dev/null; then echo; return 1; fi
+        new="$(tail -n +"$((tail_from + 1))" "$log" 2>/dev/null)"
+        case "$new" in
+            *"Depot download complete"*"depot_$depot"*) echo; return 0 ;;
+        esac
+        # steam words depot failures several ways; match the family, not one string
+        case "$new" in
+            *"depot $depot"*[Ff]ail*|*"Failed to download"*|*"download failed"*|*"Error: "*"depot"*)
+                echo; return 1 ;;
+        esac
         [ -d "$dir" ] && printf "\r    %-44s" "$(du -sh "$dir" 2>/dev/null | cut -f1) downloaded"
         sleep 5
         waited=$((waited + 5))
@@ -287,6 +323,7 @@ cmd_install() {
     fi
 
     stage_bridge "$wine" "$prefix"
+    stage_d3d "$wine" "$prefix"
 
     # seed the registry once so steam_api can find the client dll before a run
     WINEPREFIX="$prefix" WINEDEBUG=-all \
@@ -496,7 +533,7 @@ cmd_get() {
     echo "it is a windows machine and your mac games are untouched."
     echo
 
-    local rows depot manifest size dname staging games target
+    local rows depot manifest size dname staging games target baseline
     rows="$(PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/depots.py" "$appid")" \
         || die "no windows depots found for $appid"
 
@@ -509,8 +546,10 @@ cmd_get() {
         [ -n "$depot" ] || continue
         echo "  depot $depot ($((size / 1048576)) MB) ${dname:+- $dname}"
         quit_steam
+        # remember how long the log is now, so we only read what this run writes
+        baseline="$(wc -l < "$STEAM/logs/console_log.txt" 2>/dev/null || echo 0)"
         open -a Steam --args -console +download_depot "$appid" "$depot" "$manifest" >/dev/null 2>&1
-        wait_for_depot "$appid" "$depot" || die "depot $depot did not finish"
+        wait_for_depot "$appid" "$depot" "$baseline" || die "depot $depot did not finish"
         staging="$(depot_staging_dir "$appid" "$depot")"
         [ -d "$staging" ] || die "depot $depot downloaded but I cant find it"
         mkdir -p "$target"

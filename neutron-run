@@ -35,6 +35,17 @@ export WINEARCH=win64
 export MNC_GAME_BACKEND="${MNC_GAME_BACKEND:-d3dmetal}"
 export MNC_DYLD="${MNC_DYLD:-/usr/local/lib}"
 export WINEDEBUG="${WINEDEBUG:--all}"
+export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
+
+# D3DMetal dlopens its framework from next to this dylib, so point at the copy
+# inside the wine's own pack. without it ntdll's d3d fallback returns
+# STATUS_DLL_NOT_FOUND and the game dies before it draws anything.
+for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
+    if [ -f "$d/libd3dshared.dylib" ]; then
+        export CX_APPLEGPT_LIBD3DSHARED_PATH="$d/libd3dshared.dylib"
+        break
+    fi
+done
 [ -n "$appid" ] && export SteamAppId="$appid" SteamGameId="$appid"
 
 # arch strips DYLD_*, so carry it in MNC_DYLD and re-export past the boundary

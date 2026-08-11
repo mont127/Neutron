@@ -11,7 +11,7 @@ import appinfo
 SKIP_NAME = ("dlc", "soundtrack", "language pack")
 
 
-def windows_depots(app):
+def windows_depots(app, language="english"):
     out = []
     for key, d in app.get("depots", {}).items():
         if not key.isdigit() or not isinstance(d, dict):
@@ -20,6 +20,15 @@ def windows_depots(app):
         osl = str(cfg.get("oslist", "")).split(",")
         # a depot with no oslist is shared/common content and still needed
         if osl != [""] and "windows" not in osl:
+            continue
+        # localisation depots: take only the one language, not all of them.
+        # a big title ships dozens and they add up to tens of GB.
+        lang = str(cfg.get("language", "")).strip()
+        if lang and lang.lower() != language.lower():
+            continue
+        # 32-bit-only depots are useless to us, we run 64-bit
+        arch = str(cfg.get("osarch", "")).strip()
+        if arch == "32":
             continue
         if d.get("dlcappid") or d.get("manifests", {}).get("public") is None:
             continue
