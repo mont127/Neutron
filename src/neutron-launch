@@ -1,0 +1,34 @@
+#!/bin/bash
+# steam launches this as the game's "macOS build". it finds the real windows exe
+# for the appid and hands it to neutron-run. steam runs it with the game's
+# install dir as the working directory.
+set -uo pipefail
+
+NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+LOG="$HOME/Library/Logs/neutron-launch.log"
+mkdir -p "$(dirname "$LOG")"
+echo "$(date '+%F %T') args: $* cwd: $PWD" >> "$LOG"
+
+appid=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --appid) appid="${2:-}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+exe=""
+if [ -n "$appid" ] && [ -f "$NEUTRON_HOME/games/.map/$appid" ]; then
+    exe="$(head -1 "$NEUTRON_HOME/games/.map/$appid")"
+fi
+if [ -z "$exe" ] || [ ! -f "$exe" ]; then
+    exe="$(python3 "$NEUTRON_HOME/src/findexe.py" "$PWD" 2>/dev/null)"
+fi
+
+if [ -z "$exe" ] || [ ! -f "$exe" ]; then
+    echo "neutron-launch: no windows exe for appid ${appid:-?} in $PWD" >> "$LOG"
+    exit 1
+fi
+
+echo "launching $exe" >> "$LOG"
+exec "$NEUTRON_HOME/bin/neutron-run" "$exe" >> "$LOG" 2>&1

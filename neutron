@@ -196,6 +196,12 @@ wire_exe() {
     done < <(configdirs)
     [ "$wrote" = 1 ] || die "no steam user config dir found"
     note "shortcut: $name (Neutron) -> $exe"
+    # real library artwork so it doesnt look like a grey box
+    if [ -n "$appid" ]; then
+        PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/artwork.py" \
+            "$STEAM" "$appid" "$name (Neutron)" "$exe" >/dev/null 2>&1 \
+            && note "installed library artwork" || true
+    fi
 }
 
 # --- steam launch options ----------------------------------------------------
