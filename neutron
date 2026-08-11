@@ -423,6 +423,39 @@ cmd_wire_all() {
     echo "Play button that downloads on first click, then launches."
 }
 
+
+# make steam adopt an already-downloaded windows game as a REAL install, so its
+# own library page shows a working Play instead of a dead greyed Install. writes
+# an appmanifest steam accepts and replaces the launch target with a shim script
+# (macOS runs any executable file with a shebang, whatever the extension), which
+# hands the real exe to neutron-run. nothing patched, nothing injected.
+cmd_adopt() {
+    local appid="${1:-}" name gdir
+    [ -n "$appid" ] || die "usage: neutron adopt <appid>"
+    [ -f "$CONFIG" ] || die "run 'neutron install' first"
+    steam_running && die "quit steam first, then run: neutron adopt $appid"
+    name="$(game_name "$appid")"
+    gdir="$NEUTRON_HOME/games/$name"
+    [ -d "$gdir" ] || die "$name is not downloaded yet (neutron get $appid)"
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/adopt.py" apply \
+        "$STEAM" "$appid" "$gdir" "$BIN/neutron-run" || die "adopt failed"
+    # steam owns the files now; keep the map pointing at the real exe
+    local real
+    real="$(find "$STEAM/steamapps/common" -name "*.neutron" -maxdepth 3 2>/dev/null | head -1)"
+    [ -n "$real" ] && { mkdir -p "$NEUTRON_HOME/games/.map"; echo "$real" > "$NEUTRON_HOME/games/.map/$appid"; }
+    echo
+    echo "steam now treats $name as installed. start steam - its own page should"
+    echo "show Play, and clicking it runs the game through neutron."
+}
+
+cmd_unadopt() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron unadopt <appid>"
+    steam_running && die "quit steam first"
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/adopt.py" revert "$STEAM" "$appid"
+    echo "steam no longer treats appid $appid as installed."
+}
+
 cmd_scan() {
     echo "installed games (macOS preferred, neutron handles windows-only):"
     classify | while IFS='|' read -r id verdict action inst name; do
@@ -711,6 +744,8 @@ case "${1:-}" in
     enable)           shift; cmd_enable "$@" ;;
     disable)          shift; cmd_disable "$@" ;;
     get)              shift; cmd_get "$@" ;;
+    adopt)            shift; cmd_adopt "$@" ;;
+    unadopt)          shift; cmd_unadopt "$@" ;;
     get-live)         shift; cmd_get_live "$@" ;;
     wire-all)         shift; cmd_wire_all "$@" ;;
     restore)          shift; cmd_restore "$@" ;;
@@ -721,5 +756,5 @@ case "${1:-}" in
     scan-machine)     shift; classify "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac

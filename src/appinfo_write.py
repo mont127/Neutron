@@ -8,6 +8,7 @@
 #
 # appinfo.vdf is a cache. if it ever goes wrong, delete it and steam rebuilds it.
 
+import hashlib
 import io
 import struct
 import sys
@@ -165,7 +166,14 @@ class Appinfo:
         i = self._index.get(appid)
         if i is None:
             raise KeyError(appid)
-        payload = new_header + self.encode_kv(new_node)
+        kv = self.encode_kv(new_node)
+        # the second sha1 in the entry header is sha1 of the kv blob (verified
+        # against several untouched apps). leave it stale after an edit and steam
+        # decides the entry is bad and re-downloads it, wiping the change.
+        hdr = bytearray(new_header)
+        hdr[40:60] = hashlib.sha1(kv).digest()
+        new_header = bytes(hdr)
+        payload = new_header + kv
         entry = struct.pack("<II", appid, len(payload)) + payload
 
         body = bytearray()
