@@ -379,11 +379,52 @@ override_off() {
 
 override_active() { [ -f "$NEUTRON_HOME/.override-active" ]; }
 
+# StateFlags is a bitfield; bit 4 is "fully installed". dont test == 4, an app
+# with a queued update reads 6 and we would wait for ever
 game_installed() {
     local f="$STEAM/steamapps/appmanifest_$1.acf" sf
     [ -f "$f" ] || return 1
     sf="$(sed -n 's/.*"StateFlags"[[:space:]]*"\([0-9]*\)".*/\1/p' "$f" | head -1)"
-    [ "$sf" = 4 ]
+    [ -n "$sf" ] || return 1
+    [ $((sf & 4)) -ne 0 ]
+}
+
+manifest_field() {
+    sed -n "s/.*\"$2\"[[:space:]]*\"\([0-9]*\)\".*/\1/p" "$STEAM/steamapps/appmanifest_$1.acf" 2>/dev/null | head -1
+}
+
+quit_steam() {
+    steam_running || return 0
+    osascript -e 'tell application "Steam" to quit' >/dev/null 2>&1 || pkill -x steam_osx || true
+    local i
+    for i in $(seq 1 40); do steam_running || return 0; sleep 1; done
+    pkill -x steam_osx 2>/dev/null || true
+    sleep 2
+}
+
+start_steam() { open -a Steam >/dev/null 2>&1 || true; }
+
+# poll the appmanifest until steam reports the app fully installed
+wait_for_download() {
+    local appid="$1" cap="${2:-10800}" waited=0 done_b total_b sf last=""
+    while [ "$waited" -lt "$cap" ]; do
+        if game_installed "$appid"; then echo; return 0; fi
+        sf="$(manifest_field "$appid" StateFlags)"
+        if [ -n "$sf" ]; then
+            done_b="$(manifest_field "$appid" BytesDownloaded)"
+            total_b="$(manifest_field "$appid" BytesToDownload)"
+            if [ -n "$total_b" ] && [ "$total_b" -gt 0 ] 2>/dev/null; then
+                last="  downloading: $((done_b / 1048576)) / $((total_b / 1048576)) MB"
+            else
+                last="  steam state $sf"
+            fi
+            printf "\r%-60s" "$last"
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    echo
+    return 1
 }
 
 # the one command: mac build -> steam installs it natively; no mac build ->
@@ -402,28 +443,49 @@ cmd_get() {
         return
     fi
 
-    if override_active; then
-        steam_running && die "quit steam, then run: neutron get $appid"
-        if game_installed "$appid"; then
-            override_off
-            thaw_updates
-            backup_steam
-            wire_game "$appid"
-            echo "done. restart steam and launch \"$name (Neutron)\"."
-        else
-            echo "$name is still downloading in steam. when it finishes, quit steam and run: neutron get $appid"
-        fi
+    if game_installed "$appid"; then
+        quit_steam
+        backup_steam
+        wire_game "$appid"
+        start_steam
+        echo "already installed. launch \"$name (Neutron)\" from your library."
         return
     fi
 
-    steam_running && die "quit steam first, then run: neutron get $appid"
-    echo "$name has no macOS build, telling steam to download the Windows version."
+    echo "$name has no macOS build. telling steam it is a windows machine just"
+    echo "long enough to download it, then switching straight back."
+
+    # whatever happens from here, put the platform and auto-updates back
+    trap 'echo; echo "restoring steam..."; override_off; thaw_updates' EXIT INT TERM
+
+    quit_steam
+    backup_steam
     freeze_updates
     override_on
-    open -a Steam || true
-    sleep 3
-    open "steam://install/$appid" 2>/dev/null || true
-    echo "confirm the install in steam. when the download finishes, quit steam and run: neutron get $appid"
+    start_steam
+    sleep 8
+    open "steam://install/$appid" >/dev/null 2>&1 || true
+    echo
+    echo "confirm the install in steam. waiting for the download to finish"
+    echo "(ctrl-c is safe, it puts everything back)."
+    if wait_for_download "$appid"; then
+        echo "download complete."
+    else
+        echo "gave up waiting. steam has been put back to macOS mode;"
+        echo "when the download finishes just run: neutron get $appid"
+        exit 1
+    fi
+
+    override_off
+    thaw_updates
+    trap - EXIT INT TERM
+    echo "steam is back to macOS mode."
+
+    quit_steam
+    wire_game "$appid"
+    start_steam
+    echo
+    echo "done. launch \"$name (Neutron)\" from your steam library."
 }
 
 cmd_remove() {
