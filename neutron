@@ -613,7 +613,8 @@ case "${1:-}" in
     add-exe)          shift; cmd_add_exe "$@" ;;
     remove)           shift; cmd_remove "$@" ;;
     scan)             shift; cmd_scan "$@" ;;
+    scan-machine)     shift; classify "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac
