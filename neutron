@@ -157,6 +157,47 @@ unmap_compat_tool() {
     [ -f "$REGISTRY" ] && PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/compatmap.py" clear "$REGISTRY" "$appid" || true
 }
 
+# --- depot downloads ---------------------------------------------------------
+# steam's console download_depot ignores the client platform, so windows depots
+# come down on a mac with no override and no risk to native games. it stages
+# them inside the client bundle, so we move them out afterwards.
+
+depot_staging_dir() {
+    echo "$STEAM/Steam.AppBundle/Steam/Contents/MacOS/steamapps/content/app_$1/depot_$2"
+}
+
+wait_for_depot() {
+    local appid="$1" depot="$2" cap="${3:-7200}" waited=0 log="$STEAM/logs/console_log.txt" dir
+    dir="$(depot_staging_dir "$appid" "$depot")"
+    while [ "$waited" -lt "$cap" ]; do
+        if grep -aq "Depot download complete.*depot_$depot" "$log" 2>/dev/null; then echo; return 0; fi
+        if grep -aq "Failed to download depot $depot" "$log" 2>/dev/null; then echo; return 1; fi
+        [ -d "$dir" ] && printf "\r    %-44s" "$(du -sh "$dir" 2>/dev/null | cut -f1) downloaded"
+        sleep 5
+        waited=$((waited + 5))
+    done
+    echo
+    return 1
+}
+
+find_game_exe() {
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/findexe.py" "$1" 2>/dev/null
+}
+
+wire_exe() {
+    local name="$1" exe="$2" appid="${3:-}" base cfg wrote=0
+    [ -n "$exe" ] && [ -f "$exe" ] || die "no exe to wire for $name"
+    base="$(dirname "$exe")"
+    [ -n "$appid" ] && echo "$appid" > "$base/steam_appid.txt"
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        python3 "$SELF_DIR/src/shortcuts.py" add "$cfg/shortcuts.vdf" "$name (Neutron)" \
+            "\"$BIN/neutron-run\"" "$base" "\"$exe\"" && wrote=1
+    done < <(configdirs)
+    [ "$wrote" = 1 ] || die "no steam user config dir found"
+    note "shortcut: $name (Neutron) -> $exe"
+}
+
 # --- steam launch options ----------------------------------------------------
 
 configdirs() {
@@ -302,20 +343,12 @@ cmd_disable() {
 
 # wire any windows exe (not necessarily in the steam library) to a Play button
 cmd_add_exe() {
-    local name="${1:-}" exe="${2:-}" appid="${3:-}" base cfg wrote=0
+    local name="${1:-}" exe="${2:-}" appid="${3:-}"
     [ -n "$name" ] && [ -n "$exe" ] || die "usage: neutron add-exe <name> <exe.path> [appid]"
-    [ -f "$exe" ] || die "no such exe: $exe"
     [ -f "$CONFIG" ] || die "run 'neutron install' first"
     steam_running && die "close steam first (it rewrites its config on exit)"
-    base="$(dirname "$exe")"
-    [ -n "$appid" ] && echo "$appid" > "$base/steam_appid.txt"
     backup_steam
-    while IFS= read -r cfg; do
-        [ -n "$cfg" ] || continue
-        python3 "$SELF_DIR/src/shortcuts.py" add "$cfg/shortcuts.vdf" "$name (Neutron)" \
-            "\"$BIN/neutron-run\"" "$base" "\"$exe\"" && wrote=1
-    done < <(configdirs)
-    [ "$wrote" = 1 ] || die "no steam user config dir found"
+    wire_exe "$name" "$exe" "$appid"
     echo "added \"$name (Neutron)\". restart steam and launch it from your library."
 }
 
@@ -452,37 +485,40 @@ cmd_get() {
         return
     fi
 
-    echo "$name has no macOS build."
+    echo "$name has no macOS build, pulling its windows depots."
+    echo "this uses steam's own download_depot, so we never have to tell steam"
+    echo "it is a windows machine and your mac games are untouched."
     echo
-    echo "steam only accepts the windows platform switch at runtime, from its own"
-    echo "console. it resets by itself when steam restarts, so it cant leak."
-    echo
 
-    # make sure the console tab is available
-    if ! steam_running; then
-        start_steam
-        sleep 8
-    fi
-    open "steam://open/console" >/dev/null 2>&1 || true
+    local rows depot manifest size dname staging games target
+    rows="$(PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/depots.py" "$appid")" \
+        || die "no windows depots found for $appid"
 
-    cat <<EOM
-in steam, open the CONSOLE tab and paste this line:
+    games="$NEUTRON_HOME/games"
+    target="$games/$name"
+    mkdir -p "$games"
+    rm -rf "$target"
 
-    @sSteamCmdForcePlatformType windows
+    while read -r depot manifest size dname; do
+        [ -n "$depot" ] || continue
+        echo "  depot $depot ($((size / 1048576)) MB) ${dname:+- $dname}"
+        quit_steam
+        open -a Steam --args -console +download_depot "$appid" "$depot" "$manifest" >/dev/null 2>&1
+        wait_for_depot "$appid" "$depot" || die "depot $depot did not finish"
+        staging="$(depot_staging_dir "$appid" "$depot")"
+        [ -d "$staging" ] || die "depot $depot downloaded but I cant find it"
+        mkdir -p "$target"
+        # depots stack on top of each other to form the install
+        (cd "$staging" && tar cf - .) | (cd "$target" && tar xf -)
+        rm -rf "$staging"
+    done <<< "$rows"
 
-then install $name normally. leave the rest to me.
-
-EOM
-    echo "waiting for the download (ctrl-c is safe)..."
-    if ! wait_for_download "$appid"; then
-        echo "gave up waiting. when it finishes run: neutron get $appid"
-        exit 1
-    fi
-    echo "download complete."
+    echo "$appid" > "$target/steam_appid.txt"
+    note "installed to $target"
 
     quit_steam
     backup_steam
-    wire_game "$appid"
+    wire_exe "$name" "$(find_game_exe "$target")" "$appid"
     start_steam
     echo
     echo "done. launch \"$name (Neutron)\" from your steam library."
