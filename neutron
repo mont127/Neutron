@@ -452,36 +452,36 @@ cmd_get() {
         return
     fi
 
-    echo "$name has no macOS build. telling steam it is a windows machine just"
-    echo "long enough to download it, then switching straight back."
+    echo "$name has no macOS build."
+    echo
+    echo "steam only accepts the windows platform switch at runtime, from its own"
+    echo "console. it resets by itself when steam restarts, so it cant leak."
+    echo
 
-    # whatever happens from here, put the platform and auto-updates back
-    trap 'echo; echo "restoring steam..."; override_off; thaw_updates' EXIT INT TERM
+    # make sure the console tab is available
+    if ! steam_running; then
+        start_steam
+        sleep 8
+    fi
+    open "steam://open/console" >/dev/null 2>&1 || true
+
+    cat <<EOM
+in steam, open the CONSOLE tab and paste this line:
+
+    @sSteamCmdForcePlatformType windows
+
+then install $name normally. leave the rest to me.
+
+EOM
+    echo "waiting for the download (ctrl-c is safe)..."
+    if ! wait_for_download "$appid"; then
+        echo "gave up waiting. when it finishes run: neutron get $appid"
+        exit 1
+    fi
+    echo "download complete."
 
     quit_steam
     backup_steam
-    freeze_updates
-    override_on
-    start_steam
-    sleep 8
-    open "steam://install/$appid" >/dev/null 2>&1 || true
-    echo
-    echo "confirm the install in steam. waiting for the download to finish"
-    echo "(ctrl-c is safe, it puts everything back)."
-    if wait_for_download "$appid"; then
-        echo "download complete."
-    else
-        echo "gave up waiting. steam has been put back to macOS mode;"
-        echo "when the download finishes just run: neutron get $appid"
-        exit 1
-    fi
-
-    override_off
-    thaw_updates
-    trap - EXIT INT TERM
-    echo "steam is back to macOS mode."
-
-    quit_steam
     wire_game "$appid"
     start_steam
     echo
