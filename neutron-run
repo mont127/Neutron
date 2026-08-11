@@ -1,0 +1,53 @@
+#!/bin/bash
+# launch shim steam calls per game: neutron-run %command%
+# runs a windows exe under mnc's unified wine, talking to the native mac steam
+# client through the lsteamclient bridge. no windows steam.
+set -euo pipefail
+
+NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+[ -f "$NEUTRON_HOME/config" ] && . "$NEUTRON_HOME/config"
+
+wine_dir="${NEUTRON_WINE:-}"
+if [ -z "$wine_dir" ]; then
+    for d in "$HOME/Library/Application Support/Neutron/wine-unified" \
+             "$HOME/Library/Application Support/MacNCheese/deps/wine-unified" \
+             "${NEUTRON_DEV_WINE:-}"; do
+        [ -n "$d" ] && [ -x "$d/loader/wine" ] && wine_dir="$d" && break
+    done
+fi
+[ -n "$wine_dir" ] || { echo "neutron: no unified wine found" >&2; exit 1; }
+
+prefix="${NEUTRON_PREFIX:-$NEUTRON_HOME/prefix}"
+stub="$NEUTRON_HOME/bin/steam.exe"
+wine="$wine_dir/wine"
+
+[ $# -ge 1 ] || { echo "usage: neutron-run <game.exe> [args...]" >&2; exit 2; }
+exe="$1"; shift
+
+appid=""
+gdir="$(dirname "$exe")"
+[ -f "$gdir/steam_appid.txt" ] && appid="$(tr -dc 0-9 < "$gdir/steam_appid.txt" || true)"
+
+pgrep -x steam_osx >/dev/null 2>&1 || open -ga Steam || true
+
+export WINEPREFIX="$prefix"
+export WINEARCH=win64
+export MNC_GAME_BACKEND="${MNC_GAME_BACKEND:-d3dmetal}"
+export MNC_DYLD="${MNC_DYLD:-/usr/local/lib}"
+export WINEDEBUG="${WINEDEBUG:--all}"
+[ -n "$appid" ] && export SteamAppId="$appid" SteamGameId="$appid"
+
+# arch strips DYLD_*, so carry it in MNC_DYLD and re-export past the boundary
+run() {
+    arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$@"' bash "$@"
+}
+
+stubpid=""
+if ! pgrep -f "$stub" >/dev/null 2>&1; then
+    run "$wine" "$stub" >/dev/null 2>&1 &
+    stubpid=$!
+    trap '[ -n "$stubpid" ] && kill "$stubpid" 2>/dev/null || true' EXIT
+    sleep 4
+fi
+
+run "$wine" "$exe" "$@"

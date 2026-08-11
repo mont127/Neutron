@@ -1,0 +1,276 @@
+#!/bin/bash
+# neutron - install a proton-like windows-game path into the native mac steam
+# client, running through mnc's unified wine. it does not touch the mnc app.
+#
+#   neutron install [--all]    set up the runtime, back up steam, optionally
+#                              wire every installed windows-only game
+#   neutron add <appid>        route one game's play button through neutron
+#   neutron remove <appid>     undo that
+#   neutron status             show what is set up
+#   neutron uninstall [--purge]  restore steam, remove neutron (--purge: prefix too)
+set -euo pipefail
+
+HOME_DIR="$HOME"
+NEUTRON_HOME="$HOME_DIR/Library/Application Support/Neutron"
+BIN="$NEUTRON_HOME/bin"
+CONFIG="$NEUTRON_HOME/config"
+PREFIX_DEFAULT="$NEUTRON_HOME/prefix"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+STEAM="$HOME_DIR/Library/Application Support/Steam"
+DEPLOYED_WINE="$NEUTRON_HOME/wine-unified"
+DEPS_WINE="$HOME_DIR/Library/Application Support/MacNCheese/deps/wine-unified"
+# only for local dev against a wine build tree; the shipped app never uses it
+DEV_WINE="${NEUTRON_DEV_WINE:-}"
+
+die() { echo "neutron: $*" >&2; exit 1; }
+note() { echo "  $*"; }
+
+deploy_wine() {
+    local src="$1" dst="$2"
+    echo "  deploying bundled wine -> $dst" >&2
+    mkdir -p "$dst"
+    rsync -a --delete "$src/" "$dst/"
+}
+
+# the .app sets NEUTRON_BUNDLED_WINE to the private wine inside it; we copy it
+# out so it survives the app being thrown away. dev machines fall back to the
+# deps or build tree.
+resolve_wine() {
+    if [ -n "${NEUTRON_BUNDLED_WINE:-}" ] && [ -x "$NEUTRON_BUNDLED_WINE/loader/wine" ]; then
+        deploy_wine "$NEUTRON_BUNDLED_WINE" "$DEPLOYED_WINE"
+        echo "$DEPLOYED_WINE"; return
+    fi
+    for d in "$DEPLOYED_WINE" "$DEPS_WINE" "$DEV_WINE"; do
+        [ -x "$d/loader/wine" ] && { echo "$d"; return; }
+    done
+    return 1
+}
+
+# the bridge ships inside the unified wine; only fall back to the build tree
+bridge_src() {
+    local wine="$1" b
+    for b in "$wine/dlls/lsteamclient" "$DEV_WINE/dlls/lsteamclient"; do
+        [ -f "$b/lsteamclient.so" ] && { echo "$b"; return; }
+    done
+    return 1
+}
+
+steam_running() { pgrep -x steam_osx >/dev/null 2>&1; }
+
+# --- build the stub steam.exe -------------------------------------------------
+
+# the shipped .app carries a prebuilt stub so it needs no compiler; a dev
+# checkout builds it from source if mingw is around
+provide_stub() {
+    mkdir -p "$BIN"
+    if [ -f "$SELF_DIR/prebuilt/steam.exe" ]; then
+        cp "$SELF_DIR/prebuilt/steam.exe" "$BIN/steam.exe"
+        [ -f "$SELF_DIR/prebuilt/steam32.exe" ] && cp "$SELF_DIR/prebuilt/steam32.exe" "$BIN/steam32.exe"
+        note "installed prebuilt steam stub"
+    elif command -v x86_64-w64-mingw32-gcc >/dev/null; then
+        x86_64-w64-mingw32-gcc -static -O2 -o "$BIN/steam.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32
+        command -v i686-w64-mingw32-gcc >/dev/null && \
+            i686-w64-mingw32-gcc -static -O2 -o "$BIN/steam32.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32
+        note "built steam stub"
+    else
+        die "no prebuilt stub and no mingw to build one"
+    fi
+}
+
+# --- stage the bridge into wine + prefix -------------------------------------
+
+stage_bridge() {
+    local wine="$1" prefix="$2" src dst="$wine/dlls/lsteamclient"
+    src="$(bridge_src "$wine")" || die "no lsteamclient in the wine (was it built with the bridge?)"
+
+    # the bundled wine already carries the bridge; only copy it in when it came
+    # from somewhere else (a dev build tree)
+    if [ "$src" != "$dst" ]; then
+        mkdir -p "$dst/x86_64-windows" "$dst/i386-windows"
+        cp "$src/lsteamclient.so" "$dst/"
+        cp "$src/x86_64-windows/lsteamclient.dll" "$dst/x86_64-windows/"
+        [ -f "$src/i386-windows/lsteamclient.dll" ] && cp "$src/i386-windows/lsteamclient.dll" "$dst/i386-windows/"
+    fi
+
+    # into the prefix so LoadLibrary and the registry path find the pe
+    cp "$src/x86_64-windows/lsteamclient.dll" "$prefix/drive_c/windows/system32/lsteamclient.dll"
+    [ -f "$src/i386-windows/lsteamclient.dll" ] && \
+        cp "$src/i386-windows/lsteamclient.dll" "$prefix/drive_c/windows/syswow64/lsteamclient.dll"
+    note "staged bridge into prefix"
+}
+
+# --- steam launch options ----------------------------------------------------
+
+localconfigs() {
+    find "$STEAM/userdata" -maxdepth 3 -name localconfig.vdf 2>/dev/null
+}
+
+wire_game() {
+    # set LaunchOptions for one appid in every user's localconfig.vdf
+    local appid="$1" opt="\"$BIN/neutron-run\" %command%" vdf wrote=0
+    while IFS= read -r vdf; do
+        [ -n "$vdf" ] || continue
+        python3 "$SELF_DIR/src/vdf_launchopt.py" set "$vdf" "$appid" "$opt" && wrote=1
+    done < <(localconfigs)
+    [ "$wrote" = 1 ] || die "appid $appid not found in any localconfig.vdf (has steam ever shown it?)"
+}
+
+unwire_game() {
+    local appid="$1" vdf
+    while IFS= read -r vdf; do
+        [ -n "$vdf" ] || continue
+        python3 "$SELF_DIR/src/vdf_launchopt.py" clear "$vdf" "$appid" || true
+    done < <(localconfigs)
+}
+
+backup_steam() {
+    local vdf rel
+    mkdir -p "$NEUTRON_HOME/steam-backup"
+    while IFS= read -r vdf; do
+        [ -n "$vdf" ] || continue
+        rel="$(echo "$vdf" | sed "s#$STEAM/##; s#/#_#g")"
+        [ -f "$NEUTRON_HOME/steam-backup/$rel" ] || cp "$vdf" "$NEUTRON_HOME/steam-backup/$rel"
+    done < <(localconfigs)
+    note "backed up steam localconfig(s)"
+}
+
+# --- windows-only game discovery ---------------------------------------------
+
+installed_windows_games() {
+    PYTHONPATH="$SELF_DIR/src" python3 - "$STEAM" <<'PY'
+import sys, os, re, glob
+steam = sys.argv[1]
+try:
+    import appinfo
+except Exception:
+    appinfo = None
+ids = []
+for acf in glob.glob(os.path.join(steam, "steamapps", "appmanifest_*.acf")):
+    m = re.search(r'appmanifest_(\d+)\.acf', acf)
+    if m:
+        ids.append(int(m.group(1)))
+if appinfo:
+    apps = appinfo.load_appinfo(only_appids=set(ids))
+    for i in sorted(ids):
+        a = apps.get(i)
+        if (appinfo.assess_macos_build(a)[0] if a else "windows-only") == "windows-only":
+            print(i)
+else:
+    for i in sorted(ids):
+        print(i)
+PY
+}
+
+# --- subcommands -------------------------------------------------------------
+
+cmd_install() {
+    local wine prefix all=0
+    [ "${1:-}" = "--all" ] && all=1
+    wine="$(resolve_wine)" || die "no unified wine found (no bundle, deps or build tree)"
+    prefix="$PREFIX_DEFAULT"
+    echo "installing neutron (wine: $wine)"
+
+    mkdir -p "$BIN"
+    provide_stub
+    cp "$SELF_DIR/neutron-run" "$BIN/neutron-run"
+    chmod +x "$BIN/neutron-run"
+
+    if [ ! -d "$prefix/drive_c" ]; then
+        note "creating prefix $prefix"
+        WINEPREFIX="$prefix" WINEARCH=win64 WINEDEBUG=-all \
+            arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="${MNC_DYLD:-/usr/local/lib}"; exec "$0" wineboot --init' "$wine/wine" >/dev/null 2>&1 || true
+    fi
+
+    stage_bridge "$wine" "$prefix"
+
+    # seed the registry once so steam_api can find the client dll before a run
+    WINEPREFIX="$prefix" WINEDEBUG=-all \
+        arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="${MNC_DYLD:-/usr/local/lib}"; exec "$0" "$1" --once' "$wine/wine" "$BIN/steam.exe" >/dev/null 2>&1 || true
+
+    cat > "$CONFIG" <<EOF
+NEUTRON_WINE="$wine"
+NEUTRON_PREFIX="$prefix"
+MNC_GAME_BACKEND="d3dmetal"
+MNC_DYLD="/usr/local/lib"
+EOF
+    note "wrote $CONFIG"
+
+    backup_steam
+    if [ "$all" = 1 ]; then
+        steam_running && die "close steam first, then re-run (steam rewrites its config on exit)"
+        local id
+        while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            if wire_game "$id" 2>/dev/null; then note "wired appid $id"; fi
+        done < <(installed_windows_games)
+    fi
+    echo "done. add a game with: neutron add <appid>  (steam must be closed)"
+}
+
+cmd_add() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron add <appid>"
+    [ -f "$CONFIG" ] || die "run 'neutron install' first"
+    steam_running && die "close steam first (it rewrites its config on exit)"
+    backup_steam
+    wire_game "$appid"
+    echo "wired appid $appid -> neutron-run. launch it from steam."
+}
+
+cmd_remove() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron remove <appid>"
+    steam_running && die "close steam first"
+    unwire_game "$appid"
+    echo "removed appid $appid"
+}
+
+cmd_status() {
+    echo "neutron status"
+    [ -f "$CONFIG" ] && { echo "installed:"; sed 's/^/  /' "$CONFIG"; } || echo "  not installed"
+    [ -x "$BIN/neutron-run" ] && note "runner: $BIN/neutron-run"
+    [ -f "$BIN/steam.exe" ] && note "stub:   $BIN/steam.exe"
+    local vdf
+    while IFS= read -r vdf; do
+        [ -n "$vdf" ] || continue
+        note "wired in $(basename "$(dirname "$(dirname "$vdf")")"):"
+        python3 "$SELF_DIR/src/vdf_launchopt.py" list "$vdf" | sed 's/^/    /' || true
+    done < <(localconfigs)
+}
+
+cmd_uninstall() {
+    local purge=0
+    [ "${1:-}" = "--purge" ] && purge=1
+    steam_running && die "close steam first, then re-run uninstall"
+    if [ -d "$NEUTRON_HOME/steam-backup" ]; then
+        local f rel dst
+        for f in "$NEUTRON_HOME/steam-backup"/*; do
+            [ -f "$f" ] || continue
+            rel="$(basename "$f" | sed 's/_/\//g')"
+            dst="$STEAM/$rel"
+            [ -f "$dst" ] && cp "$f" "$dst" && note "restored $rel"
+        done
+    fi
+    local wine
+    wine="$(. "$CONFIG" 2>/dev/null; echo "${NEUTRON_WINE:-}")"
+    if [ -n "$wine" ]; then
+        case "$wine" in
+            "$NEUTRON_HOME"/*) rm -rf "$wine"; note "removed deployed wine" ;;
+            *) rm -rf "$wine/dlls/lsteamclient"; note "unstaged bridge from $wine" ;;
+        esac
+    fi
+    rm -rf "$BIN" "$CONFIG"
+    [ "$purge" = 1 ] && rm -rf "$NEUTRON_HOME/prefix"
+    rm -rf "$NEUTRON_HOME/steam-backup"
+    echo "uninstalled${purge:+ (prefix purged)}"
+}
+
+case "${1:-}" in
+    install)   shift; cmd_install "$@" ;;
+    add)       shift; cmd_add "$@" ;;
+    remove)    shift; cmd_remove "$@" ;;
+    status)    shift; cmd_status "$@" ;;
+    uninstall) shift; cmd_uninstall "$@" ;;
+    *) echo "usage: neutron {install [--all]|add <appid>|remove <appid>|status|uninstall [--purge]}" >&2; exit 2 ;;
+esac
