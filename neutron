@@ -645,6 +645,51 @@ cmd_menu() {
     esac
 }
 
+
+FORCED="$NEUTRON_HOME/forced"
+
+# games that HAVE a mac build but that you want through neutron anyway (cs2's
+# mac build is the legacy CS:GO). kept in a list so "apply" re-does them after
+# every update without you remembering.
+cmd_force() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron force <appid>   (or: neutron unforce <appid>)"
+    mkdir -p "$NEUTRON_HOME"
+    touch "$FORCED"
+    grep -qx "$appid" "$FORCED" || echo "$appid" >> "$FORCED"
+    echo "$(game_name "$appid") will use its windows build."
+    echo "run 'neutron apply' (steam closed) to make it so."
+}
+
+cmd_unforce() {
+    local appid="${1:-}"
+    [ -n "$appid" ] || die "usage: neutron unforce <appid>"
+    [ -f "$FORCED" ] && grep -vx "$appid" "$FORCED" > "$FORCED.tmp" && mv "$FORCED.tmp" "$FORCED"
+    echo "removed $appid from the forced list (its own mac build will be used again)."
+}
+
+# the one command. does everything, safe to run as often as you like - after a
+# neutron update, after buying a game, whenever. steam must be closed.
+cmd_apply() {
+    steam_running && die "quit steam first, then run: neutron apply"
+    echo "applying neutron..."
+    cmd_install >/dev/null || die "setup failed"
+    note "runtime + watcher up to date"
+    cmd_enable_all | sed -n '$p'
+    if [ -f "$FORCED" ]; then
+        local id n=0
+        while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" \
+                enable "$APPINFO" "$id" --force >/dev/null 2>&1 && n=$((n + 1))
+        done < "$FORCED"
+        [ "$n" -gt 0 ] && note "forced $n game(s) onto their windows build"
+    fi
+    cmd_menu on >/dev/null 2>&1 && note "Neutron Settings is in your steam library"
+    echo
+    echo "done. start steam."
+}
+
 cmd_scan() {
     echo "installed games (macOS preferred, neutron handles windows-only):"
     classify | while IFS='|' read -r id verdict action inst name; do
@@ -940,6 +985,9 @@ case "${1:-}" in
     sync)             shift; cmd_sync "$@" ;;
     autosync)         shift; cmd_autosync "$@" ;;
     menu)             shift; cmd_menu "$@" ;;
+    apply)            shift; cmd_apply "$@" ;;
+    force)            shift; cmd_force "$@" ;;
+    unforce)          shift; cmd_unforce "$@" ;;
     set)              shift; cmd_set "$@" ;;
     adopt)            shift; cmd_adopt "$@" ;;
     unadopt)          shift; cmd_unadopt "$@" ;;
@@ -953,5 +1001,5 @@ case "${1:-}" in
     scan-machine)     shift; classify "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac

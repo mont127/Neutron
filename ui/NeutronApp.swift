@@ -78,16 +78,25 @@ final class Installer: ObservableObject {
         if step == .checking { step = isInstalled ? .done : .notInstalled }
     }
 
-    func install() {
+    // one button for everything: quit steam if needed, apply, put steam back.
+    // safe to press again after any neutron update.
+    func install(reopenSteam: Bool = true) {
         step = .working
-        log = ["Setting up Neutron…"]
+        log = []
         DispatchQueue.global().async {
-            self.stream("/bin/bash", [self.script, "install"])
-            // with steam closed we can enable every windows game right now;
-            // otherwise the watcher does it the moment steam quits
-            if !self.steamRunning {
-                self.append("Enabling your Windows games…")
-                self.stream("/bin/bash", [self.script, "enable-all"])
+            let wasRunning = self.steamRunning
+            if wasRunning {
+                self.append("Closing Steam…")
+                self.run("/usr/bin/osascript", ["-e", "tell application \"Steam\" to quit"])
+                for _ in 0..<40 {
+                    if self.run("/usr/bin/pgrep", ["-x", "steam_osx"]).isEmpty { break }
+                    Thread.sleep(forTimeInterval: 1)
+                }
+            }
+            self.stream("/bin/bash", [self.script, "apply"])
+            if wasRunning && reopenSteam {
+                self.append("Reopening Steam…")
+                self.run("/usr/bin/open", ["-a", "Steam"])
             }
             DispatchQueue.main.async {
                 self.step = self.isInstalled ? .done : .failed("Setup did not complete — see the log.")
@@ -248,11 +257,12 @@ struct ContentView: View {
                     ProgressView().controlSize(.small)
                     Text("Working…").font(.system(size: 12)).foregroundStyle(.secondary)
                 } else if m.step == .done {
+                    Button("Re-apply") { m.install() }.controlSize(.large)
                     Button("Open Steam") {
                         NSWorkspace.shared.launchApplication("Steam")
-                    }.controlSize(.large)
+                    }.buttonStyle(.borderedProminent).controlSize(.large)
                 } else {
-                    Button("Install Neutron") { m.install() }
+                    Button(m.step == .done ? "Re-apply" : "Install Neutron") { m.install() }
                         .buttonStyle(.borderedProminent).controlSize(.large)
                 }
             }
