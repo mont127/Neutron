@@ -46,8 +46,11 @@ would drag native Mac games onto their Windows depots.
 
 ## install
 
-The normal way is the `.app`: double-click it, click Install. It deploys the
-bundled wine and wires up the runtime.
+The normal way is the `.app` from the releases page: drag it to Applications,
+right-click it and choose Open (it is not notarised, so a plain double-click
+gets refused the first time), then click Install. It unpacks the bundled engine
+once and wires up the runtime; after that the app is optional and only holds the
+settings.
 
 From a checkout (you supply your own wine build):
 
@@ -89,12 +92,26 @@ under `~/Library/Application Support/Neutron/steam-backup`.
 
 ## building the .app
 
-    ./build-app.sh /path/to/unified-wine [output-dir]
+Three steps, because the engine is packed once and reused:
+
+    ./build-wine-bundle.sh /path/to/unified-wine dist/wine-unified-bundle.zip
+    ./build-ui.sh dist dist/wine-unified-bundle.zip
+    ./build-dmg.sh 0.2
 
 The wine build dir must have `loader/wine` and, built into it,
-`dlls/lsteamclient`. It is copied into `Neutron Installer.app` and never touches
-this repo. The steam stub is prebuilt into the app so the target machine needs
-no compiler.
+`dlls/lsteamclient`. `build-wine-bundle.sh` drops object files, static libs and
+wine's per-dll test suites (about half the tree, none of it needed to run a
+game) and copies `nls/` and `fonts/` for real rather than shipping the symlinks,
+which would dangle on someone else's machine. The zip lands in the app's
+Resources; the installer unpacks it on first run. Nothing here is committed to
+this repo.
+
+`build-app.sh` is the older variant that copies an unpacked wine into the
+bundle instead of a zip; it still works but produces a much larger app.
+
+The steam stub is prebuilt into the app so the target machine needs no compiler.
+Sign last: anything written into the bundle after `codesign` breaks its seal,
+which is why the installer sets `PYTHONDONTWRITEBYTECODE`.
 
 ## layout
 
