@@ -9,14 +9,12 @@
          put it back. does nothing otherwise. no network, no ports, no injection. -->
     <key>ProgramArguments</key>
     <array>
-        <string>__NEUTRON_APP__/neutron</string>
-        <string>sync</string>
-        <string>--quiet</string>
+        <string>__NEUTRON_APP__/neutron-watch</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
-    <key>StartInterval</key>
-    <integer>300</integer>
+    <key>KeepAlive</key>
+    <true/>
     <key>ProcessType</key>
     <string>Background</string>
     <key>LowPriorityIO</key>

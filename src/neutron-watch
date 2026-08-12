@@ -1,0 +1,35 @@
+#!/bin/bash
+# Watches for steam rewriting its app metadata and puts our overlay straight back
+# on, so a newly bought game - or one whose metadata valve just refreshed - keeps
+# working without you running anything.
+#
+# Checks every 3s, but only stats a file: real work happens only when appinfo
+# actually changed AND steam is closed (steam would overwrite us otherwise).
+set -uo pipefail
+
+N="$HOME/Library/Application Support/Neutron"
+APPINFO="$HOME/Library/Application Support/Steam/appcache/appinfo.vdf"
+INTERVAL="${NEUTRON_WATCH_INTERVAL:-3}"
+last=""
+pending=0
+
+while :; do
+    sleep "$INTERVAL"
+    [ -f "$APPINFO" ] || continue
+
+    now="$(stat -f %m "$APPINFO" 2>/dev/null)"
+    [ -n "$now" ] || continue
+    if [ "$now" != "$last" ]; then
+        last="$now"
+        pending=1          # steam touched it; re-check as soon as steam is gone
+    fi
+    [ "$pending" = 1 ] || continue
+
+    # never edit while steam is up - it holds appinfo in memory and writes on exit
+    pgrep -x steam_osx >/dev/null 2>&1 && continue
+
+    if [ -x "$N/app/neutron" ]; then
+        "$N/app/neutron" sync --quiet >/dev/null 2>&1
+        pending=0
+    fi
+done

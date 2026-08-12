@@ -322,9 +322,11 @@ cmd_install() {
     # after the original checkout / .app is gone
     mkdir -p "$NEUTRON_HOME/app"
     cp -R "$SELF_DIR/src" "$NEUTRON_HOME/app/"
-    cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$SELF_DIR/src/neutron-play" "$NEUTRON_HOME/app/" 2>/dev/null || \
+    cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$SELF_DIR/src/neutron-play" \
+       "$SELF_DIR/src/neutron-watch" "$NEUTRON_HOME/app/" 2>/dev/null || \
         cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$NEUTRON_HOME/app/"
     chmod +x "$NEUTRON_HOME/app/neutron" "$NEUTRON_HOME/app/neutron-run"
+    [ -f "$NEUTRON_HOME/app/neutron-watch" ] && chmod +x "$NEUTRON_HOME/app/neutron-watch"
     cp "$SELF_DIR/neutron-run" "$BIN/neutron-run"
     cp "$SELF_DIR/src/neutron-play" "$BIN/neutron-play"
     chmod +x "$BIN/neutron-run" "$BIN/neutron-play"
