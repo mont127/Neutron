@@ -481,15 +481,20 @@ install_runtime() {
 
 # teach steam that one windows-only game also has a macOS build, which is our
 # shim. steam then offers its own Install button and its own Play button.
+# --force: the game HAS a mac build but we want the windows one anyway (cs2
+# ships a legacy CS:GO mac build, so steam installs that instead of real cs2)
 cmd_enable_game() {
-    local appid="${1:-}"
-    [ -n "$appid" ] || die "usage: neutron enable-game <appid>"
+    local appid="" force=""
+    for a in "$@"; do
+        case "$a" in --force) force="--force" ;; *) appid="$a" ;; esac
+    done
+    [ -n "$appid" ] || die "usage: neutron enable-game <appid> [--force]"
     steam_running && die "quit steam first, then run: neutron enable-game $appid"
     [ -f "$APPINFO" ] || die "no appinfo cache"
     mkdir -p "$NEUTRON_HOME/backup"
     [ -f "$NEUTRON_HOME/backup/appinfo.orig.vdf" ] || cp "$APPINFO" "$NEUTRON_HOME/backup/appinfo.orig.vdf"
     install_runtime >/dev/null
-    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" enable "$APPINFO" "$appid" | sed 's/^/  /'
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" enable "$APPINFO" "$appid" ${force:+--force} | sed 's/^/  /'
 }
 
 # same for every windows-only game you own

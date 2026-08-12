@@ -45,7 +45,21 @@ def describe(root):
         print("  depot %-9s oslist=%s" % (key, get(cfg, "oslist") or "-"))
 
 
-def neutronize(root, appid, shim):
+def drop_os(node, key, unwanted="macos"):
+    cur = get(node, key)
+    if cur is None:
+        return False
+    parts = [p for p in str(cur).split(",") if p and p != unwanted]
+    if parts == [p for p in str(cur).split(",") if p]:
+        return False
+    set_str(node, key, ",".join(parts))
+    return True
+
+
+def neutronize(root, appid, shim, force=False):
+    """force: the game HAS a macOS build but we want the windows one anyway
+    (CS2 ships a legacy CS:GO mac build, so steam installs that instead of the
+    real thing). hide the game's own macOS content so only ours is eligible."""
     changed = []
     common = get(root, "common")
     if common is not None and add_os(common, "oslist"):
@@ -59,6 +73,11 @@ def neutronize(root, appid, shim):
         if cfg is None:
             continue
         osl = str(get(cfg, "oslist") or "")
+        if force and "macos" in osl and "windows" not in osl:
+            # the game's own mac depot: legacy content we do not want installed
+            if drop_os(cfg, "oslist"):
+                changed.append("depot %s: dropped macos (its legacy mac build)" % key)
+            continue
         if "windows" in osl and add_os(cfg, "oslist"):
             changed.append("depot %s oslist += macos" % key)
 
@@ -75,7 +94,10 @@ def neutronize(root, appid, shim):
 
     # a launch entry with no oslist matches every platform, so on a mac steam
     # would offer BOTH the raw .exe and ours and ask the user which to run. pin
-    # the game's own entries to windows so only ours shows up here.
+    # the game's own entries to windows so only ours shows up here. in force
+    # mode also strip macos from the game's own mac entries, otherwise steam
+    # keeps offering (and preferring) its legacy mac build.
+    win_exe = None
     for t, key, entry in launches:
         if t != MAP or key == LAUNCH_KEY:
             continue
@@ -83,18 +105,32 @@ def neutronize(root, appid, shim):
         if cfg is None:
             cfg = []
             entry.append((MAP, "config", cfg))
-        if not str(get(cfg, "oslist") or "").strip():
+        osl = str(get(cfg, "oslist") or "").strip()
+        if not osl:
             set_str(cfg, "oslist", "windows")
+            osl = "windows"
             changed.append("launch %s pinned to windows (was any-platform)" % key)
+        elif force and "macos" in osl:
+            if drop_os(cfg, "oslist"):
+                changed.append("launch %s: dropped macos (%s)" %
+                               (key, str(get(entry, "description") or "its mac build")[:34]))
+        if win_exe is None and "windows" in osl:
+            exe = get(entry, "executable")
+            # skip the obvious legacy/helper entries when picking the real game
+            if exe and not any(w in str(exe).lower() for w in ("legacy", "cfg.exe", "unins")):
+                win_exe = str(exe)
 
     # replace ours if it is already there, so fixes land on a re-run
     old = find(launches, LAUNCH_KEY)
     if old >= 0:
         del launches[old]
     if True:
+        args = "--appid %d" % appid
+        if win_exe:
+            args += ' --exe "%s"' % win_exe.replace("\\", "\\\\")
         entry = [
             (STR, "executable", shim),
-            (STR, "arguments", "--appid %d" % appid),
+            (STR, "arguments", args),
             (STR, "type", "default"),
             # say 64-bit explicitly: with no osarch steam assumes the macOS build
             # is a legacy 32-bit one and warns that it cannot run
@@ -151,10 +187,12 @@ def main(argv):
         return 0
 
     if action == "enable":
+        force = "--force" in argv
+        argv = [a for a in argv if a != "--force"]
         shim = argv[4] if len(argv) > 4 else DEFAULT_SHIM
         print("before:")
         describe(root)
-        changed = neutronize(root, appid, shim)
+        changed = neutronize(root, appid, shim, force=force)
         if not changed:
             print("nothing to change")
             return 0

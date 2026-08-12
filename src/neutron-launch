@@ -21,10 +21,15 @@ mkdir -p "$(dirname "$LOG")"
 echo "$(date '+%F %T') args: $* cwd: $PWD" >> "$LOG"
 
 appid=""
+want_exe=""
 game_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --appid) appid="${2:-}"; shift 2 ;;
+        # the exact windows binary steam lists for this game, relative to the
+        # install dir. matters for anything shipping several exes (cs2 has the
+        # real game plus the legacy csgo ones)
+        --exe) want_exe="${2:-}"; shift 2 ;;
         backend=*) export MNC_GAME_BACKEND="${1#backend=}"; shift ;;
         msync=*)   export NEUTRON_MSYNC="${1#msync=}"; shift ;;
         esync=*)   export NEUTRON_ESYNC="${1#esync=}"; shift ;;
@@ -78,7 +83,13 @@ findexe() {
 exe=""
 base="$(find_install_dir 2>/dev/null || true)"
 [ -z "$base" ] && [ -d "$PWD" ] && base="$PWD"
-[ -n "$base" ] && exe="$(findexe "$base")"
+
+# steam's own path for this game wins; windows separators become unix ones
+if [ -n "$want_exe" ] && [ -n "$base" ]; then
+    cand="$base/$(printf '%s' "$want_exe" | tr '\\' '/')"
+    [ -f "$cand" ] && exe="$cand"
+fi
+[ -z "$exe" ] && [ -n "$base" ] && exe="$(findexe "$base")"
 
 # fall back to whatever neutron downloaded itself
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
