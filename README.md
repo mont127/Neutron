@@ -1,4 +1,4 @@
-# Neutron
+<h1 align="center">Neutron</h1>
 
 <p align="center">
   <img
