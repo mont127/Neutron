@@ -354,15 +354,19 @@ EOF
 
     backup_steam
     install_compat_tool
+    install_runtime
+    # neutron rides along with steam from here on: the watcher keeps every
+    # windows game's overlay in place, including newly bought ones
+    cmd_autosync on >/dev/null 2>&1 && note "auto-sync running alongside steam"
     if steam_running; then
         echo
-        echo "installed, but steam is running so the compat tool isnt enabled yet."
-        echo "quit steam and run:  neutron enable"
+        echo "installed. quit steam and run 'neutron enable-all' once, then start"
+        echo "steam: your windows games get their own Install and Play buttons."
     else
         map_compat_tool 0
         echo
-        echo "done. start steam: windows-only games now have an Install button and"
-        echo "launch through neutron."
+        echo "done. run 'neutron enable-all', then start steam: windows-only games"
+        echo "now have their own Install button and launch through neutron."
     fi
 }
 
