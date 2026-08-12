@@ -28,6 +28,10 @@ done
 cp "$SELF/neutron" "$SELF/neutron-run" "$APP/Contents/Resources/installer/"
 # all of src/ ships: the launch shim, watcher, LaunchAgent plist and js
 rsync -a --exclude='__pycache__' "$SELF/src/" "$APP/Contents/Resources/installer/src/"
+
+# the real dxvk dxgi, staged over the pack's wined3d one. without it the dxvk
+# backend still renders but reports the wrong adapter.
+[ -d "$SELF/vendor" ] && rsync -a "$SELF/vendor/" "$APP/Contents/Resources/installer/vendor/"
 chmod +x "$APP/Contents/Resources/installer/neutron" \
          "$APP/Contents/Resources/installer/neutron-run" \
          "$APP/Contents/Resources/installer/src/neutron-launch" \
