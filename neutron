@@ -10,6 +10,10 @@
 #   neutron uninstall [--purge]  restore steam, remove neutron (--purge: prefix too)
 set -euo pipefail
 
+# these scripts run from inside a signed .app. if python drops __pycache__ next
+# to them it breaks the bundle's seal and macos stops opening it.
+export PYTHONDONTWRITEBYTECODE=1
+
 HOME_DIR="$HOME"
 NEUTRON_HOME="$HOME_DIR/Library/Application Support/Neutron"
 BIN="$NEUTRON_HOME/bin"

@@ -68,5 +68,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 echo "</plist>" >> "$APP/Contents/Info.plist"
 
+# sign last, after every resource is in place - anything written into the
+# bundle afterwards invalidates the seal
+find "$APP" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 codesign --force --deep --sign - "$APP" 2>/dev/null || echo "  (unsigned, fine for local use)"
+codesign --verify --deep "$APP" 2>&1 && echo "  signature ok"
 echo "built: $APP"
