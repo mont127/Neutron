@@ -1,7 +1,5 @@
 # Neutron
 
-The proton mac never had.
-
 <p align="center">
   <img
     width="220"
@@ -10,6 +8,8 @@ The proton mac never had.
     src="https://github.com/user-attachments/assets/099ab753-e42d-47a1-add6-0fc4549039b2"
   />
 </p>
+The proton mac never had.
+
 
 
 Neutron runs Windows Steam games on macOS through the native Steam client and a
