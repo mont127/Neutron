@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ui/assets/wordmark.png" alt="Neutron" width="440">
+  <img src="ui/assets/banner.png" alt="Neutron" width="560">
 </p>
 
 <p align="center">
