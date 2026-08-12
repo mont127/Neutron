@@ -540,7 +540,7 @@ cmd_enable_all() {
 # a persistent default per game. steam's Launch Options box overrides it.
 cmd_set() {
     local appid="${1:-}" kv
-    [ -n "$appid" ] || die "usage: neutron set <appid> backend=dxmt msync=0 hud=1"
+    [ -n "$appid" ] || die "usage: neutron set <appid> backend=dxmt hud=1"
     shift
     mkdir -p "$NEUTRON_HOME/games/.cfg"
     local f="$NEUTRON_HOME/games/.cfg/$appid"
@@ -548,11 +548,9 @@ cmd_set() {
     for kv in "$@"; do
         case "$kv" in
             backend=*) echo "export MNC_GAME_BACKEND=${kv#backend=}" >> "$f" ;;
-            msync=*)   echo "export NEUTRON_MSYNC=${kv#msync=}" >> "$f" ;;
-            esync=*)   echo "export NEUTRON_ESYNC=${kv#esync=}" >> "$f" ;;
             hud=*)     echo "export NEUTRON_HUD=${kv#hud=}" >> "$f" ;;
             debug=*)   echo "export NEUTRON_DEBUG=${kv#debug=}" >> "$f" ;;
-            *) die "unknown setting: $kv (backend|msync|esync|hud|debug)" ;;
+            *) die "unknown setting: $kv (backend|hud|debug)" ;;
         esac
     done
     echo "settings for $appid:"; sed 's/^export /  /' "$f"

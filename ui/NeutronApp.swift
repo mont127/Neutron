@@ -28,8 +28,6 @@ final class Installer: ObservableObject {
     // global defaults every game inherits unless its own Launch Options override
     @Published var backend = "d3dmetal"
     @Published var metalHUD = false
-    @Published var msync = false      // known to crash-loop on this wine
-    @Published var esync = true
 
     var defaultsPath: String { neutronHome + "/defaults" }
 
@@ -42,8 +40,6 @@ final class Installer: ObservableObject {
             switch kv[0].replacingOccurrences(of: "export ", with: "") {
             case "MNC_GAME_BACKEND": backend = v
             case "NEUTRON_HUD": metalHUD = (v == "1")
-            case "NEUTRON_MSYNC": msync = (v == "1")
-            case "NEUTRON_ESYNC": esync = (v == "1")
             default: break
             }
         }
@@ -53,8 +49,6 @@ final class Installer: ObservableObject {
         let body = """
         export MNC_GAME_BACKEND=\(backend)
         export NEUTRON_HUD=\(metalHUD ? "1" : "0")
-        export NEUTRON_MSYNC=\(msync ? "1" : "0")
-        export NEUTRON_ESYNC=\(esync ? "1" : "0")
         """
         try? FileManager.default.createDirectory(atPath: neutronHome,
               withIntermediateDirectories: true)
@@ -247,12 +241,6 @@ struct ContentView: View {
                     Toggle("Metal performance HUD", isOn: $m.metalHUD)
                         .font(.system(size: 12))
                         .onChange(of: m.metalHUD) { _, _ in m.saveDefaults() }
-                    Toggle("esync (recommended)", isOn: $m.esync)
-                        .font(.system(size: 12))
-                        .onChange(of: m.esync) { _, _ in m.saveDefaults() }
-                    Toggle("msync (faster, but crashes many games here)", isOn: $m.msync)
-                        .font(.system(size: 12))
-                        .onChange(of: m.msync) { _, _ in m.saveDefaults() }
                     Text("Per game, override these in Steam \u{2192} Properties \u{2192} Launch Options, e.g. backend=dxmt hud=1")
                         .font(.system(size: 10)).foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)

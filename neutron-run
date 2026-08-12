@@ -50,10 +50,9 @@ export WINEPREFIX="$prefix"
 export WINEARCH=win64
 export MNC_GAME_BACKEND="${MNC_GAME_BACKEND:-d3dmetal}"
 # settings, set per game from steam's launch options box
-# msync is OFF unless you ask for it: it is faster but known to crash-loop on
-# this wine, so it must never be the default
-[ "${NEUTRON_MSYNC:-0}" = 1 ] && export WINEMSYNC=1
-[ "${NEUTRON_ESYNC:-0}" = 1 ] && export WINEESYNC=1
+# this wine supports neither, and inheriting one from the caller kills games
+export WINEMSYNC=0
+export WINEESYNC=0
 [ "${NEUTRON_HUD:-0}" = 1 ] && export MTL_HUD_ENABLED=1
 [ "${NEUTRON_DEBUG:-0}" = 1 ] && WINEDEBUG="+loaddll,+module,+seh"
 # order matters: mnc-d3d (D3DMetal, libd3dshared) first. with only
