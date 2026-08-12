@@ -101,6 +101,19 @@ export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 # opts into, so the loader finds no driver at all. write our own without it.
 # the dxgi check uses a command substitution, not "strings | grep -q": under
 # pipefail grep exits early, strings takes SIGPIPE and the pipeline returns 141.
+# dxmt shaders read their descriptor table from a slot chosen by the airconv that
+# is statically linked into winemetal.so. an old winemetal emits index 30 while
+# the shipped d3d11_dxmt binds index 1, so every textured draw samples nothing:
+# the game is black while every api call reports success. say so rather than
+# hand back a black window.
+if [ "$MNC_GAME_BACKEND" = "dxmt" ]; then
+    _wm="$wine_dir/dlls/winemetal/winemetal.so"
+    if [ -f "$_wm" ] && ! nm -a "$_wm" 2>/dev/null | grep -q setup_binding_table2; then
+        echo "neutron: this wine has the old winemetal, dxmt renders black. re-run 'neutron install'" >&2
+    fi
+    unset _wm
+fi
+
 if [ "$MNC_GAME_BACKEND" = "dxvk" ]; then
     _dxgi="$prefix/drive_c/windows/system32/dxgi_dxvk.dll"
     if [ ! -f "$_dxgi" ] || [ "$(strings -a "$_dxgi" 2>/dev/null | grep -ci dxvk || true)" = 0 ]; then

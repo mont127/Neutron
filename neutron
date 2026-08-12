@@ -146,6 +146,15 @@ stage_d3d() {
     done
     note "staged $n graphics dlls from $(basename "$pack")"
 
+    # dxmt caches compiled shaders per exe and keys them on its own version only,
+    # not on which airconv built them. an upgrade that changes the shader abi
+    # leaves stale AIR behind, which renders black. cheap to rebuild, so drop it.
+    local dxcache
+    dxcache="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null)dxmt"
+    if [ -d "$dxcache" ]; then
+        rm -rf "$dxcache" && note "cleared the dxmt shader cache"
+    fi
+
     # the pack's dxgi_dxvk.dll is not DXVK at all -- it is wine's wined3d dxgi
     # (0 dxvk strings, 2672 wined3d strings, imports wined3d.dll). DXVK's d3d11
     # then warns "Adapter is not a DXVK adapter" and reports a fake
