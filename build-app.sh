@@ -61,6 +61,7 @@ cat > "$APP/Contents/MacOS/neutron-installer" <<'LAUNCH'
 #!/bin/bash
 here="$(cd "$(dirname "$0")/../Resources" && pwd)"
 export NEUTRON_BUNDLED_WINE="$here/wine-unified"
+export NEUTRON_WINE_ZIP="$here/wine-unified-bundle.zip"
 log="$HOME/Library/Logs/neutron-install.log"
 mkdir -p "$(dirname "$log")"
 

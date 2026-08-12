@@ -45,6 +45,21 @@ resolve_wine() {
         deploy_wine "$NEUTRON_BUNDLED_WINE" "$DEPLOYED_WINE"
         echo "$DEPLOYED_WINE"; return
     fi
+    # the shipped app carries the engine as a zip; unpack it once, then it is
+    # just a normal wine dir and the app can be thrown away
+    if [ -n "${NEUTRON_WINE_ZIP:-}" ] && [ -f "$NEUTRON_WINE_ZIP" ] \
+       && [ ! -x "$DEPLOYED_WINE/loader/wine" ]; then
+        echo "  unpacking the wine engine (a few minutes, once)" >&2
+        rm -rf "$DEPLOYED_WINE"; mkdir -p "$DEPLOYED_WINE"
+        if ditto -x -k "$NEUTRON_WINE_ZIP" "$DEPLOYED_WINE" 2>/dev/null \
+           || unzip -q "$NEUTRON_WINE_ZIP" -d "$DEPLOYED_WINE"; then
+            chmod +x "$DEPLOYED_WINE/loader/wine" "$DEPLOYED_WINE/wine" \
+                     "$DEPLOYED_WINE/server/wineserver" 2>/dev/null || true
+        else
+            echo "  could not unpack $NEUTRON_WINE_ZIP" >&2
+            rm -rf "$DEPLOYED_WINE"
+        fi
+    fi
     for d in "$DEPLOYED_WINE" "$DEPS_WINE" "$DEV_WINE"; do
         [ -x "$d/loader/wine" ] && { echo "$d"; return; }
     done
