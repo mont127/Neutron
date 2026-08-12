@@ -2,7 +2,14 @@
 
 The proton mac never had.
 
-<img width="220" height="217" alt="Logo" src="https://github.com/user-attachments/assets/099ab753-e42d-47a1-add6-0fc4549039b2" />
+<p align="center">
+  <img
+    width="220"
+    height="217"
+    alt="Logo"
+    src="https://github.com/user-attachments/assets/099ab753-e42d-47a1-add6-0fc4549039b2"
+  />
+</p>
 
 
 Neutron runs Windows Steam games on macOS through the native Steam client and a
