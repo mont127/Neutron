@@ -1,5 +1,12 @@
+<h1 align="center">Neutron</h1>
+
 <p align="center">
-  <img src="ui/assets/banner.png" alt="Neutron" width="560">
+  <img
+    width="220"
+    height="217"
+    alt="Logo"
+    src="https://github.com/user-attachments/assets/099ab753-e42d-47a1-add6-0fc4549039b2"
+  />
 </p>
 
 <p align="center">
@@ -8,7 +15,6 @@
   <img alt="Shell" src="https://img.shields.io/badge/Shell-orange.svg">
   <img alt="Python" src="https://img.shields.io/badge/Python-blue.svg">
 </p>
-
 
 The proton mac never had.
 
