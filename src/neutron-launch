@@ -95,4 +95,4 @@ if [ -z "$exe" ] || [ ! -f "$exe" ]; then
 fi
 
 echo "launching $exe  backend=${MNC_GAME_BACKEND:-default}" >> "$LOG"
-exec "$N/bin/neutron-run" "$exe" "${game_args[@]+"${game_args[@]}"}" >> "$LOG" 2>&1
+NEUTRON_APPID="$appid" exec "$N/bin/neutron-run" "$exe" "${game_args[@]+"${game_args[@]}"}" >> "$LOG" 2>&1

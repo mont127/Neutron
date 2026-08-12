@@ -284,7 +284,9 @@ wire_shortcut() {
 wire_exe() {
     local name="$1" exe="$2" appid="${3:-}"
     [ -n "$appid" ] || die "wire_exe needs an appid"
-    [ -n "$exe" ] && [ -f "$exe" ] && echo "$appid" > "$(dirname "$exe")/steam_appid.txt"
+    # deliberately NOT writing steam_appid.txt into the game folder: an extra
+    # file in a game's bin dir fails its integrity check. the appid is passed
+    # to neutron-run in the environment instead.
     wire_shortcut "$name" "$appid" "$([ -n "$exe" ] && dirname "$exe" || echo "$NEUTRON_HOME/games")"
 }
 
@@ -693,10 +695,27 @@ cmd_unforce() {
 }
 
 # does everything. steam must be closed.
+# remove steam_appid.txt files an older neutron wrote into game folders. only
+# ours: the file must contain exactly the appid of the game it sits in, which is
+# what we used to write. a game that ships its own keeps it.
+clean_appid_files() {
+    local id dir n=0 f
+    classify | while IFS='|' read -r id verdict action inst name; do
+        [ -n "$inst" ] && [ -d "$inst" ] || continue
+        while IFS= read -r f; do
+            [ -f "$f" ] || continue
+            if [ "$(tr -dc 0-9 < "$f")" = "$id" ]; then
+                rm -f "$f" && echo "  removed a stale steam_appid.txt from $(basename "$inst")"
+            fi
+        done < <(find "$inst" -maxdepth 4 -name steam_appid.txt 2>/dev/null)
+    done
+}
+
 cmd_apply() {
     steam_running && die "quit steam first, then run: neutron apply"
     echo "applying neutron..."
     cmd_install >/dev/null || die "setup failed"
+    clean_appid_files
     note "runtime + watcher up to date"
     cmd_enable_all | sed -n '$p'
     if [ -f "$FORCED" ]; then
@@ -876,7 +895,9 @@ cmd_get() {
         rm -rf "$staging"
     done <<< "$rows"
 
-    echo "$appid" > "$target/steam_appid.txt"
+    # deliberately NOT writing steam_appid.txt into the game folder: an extra
+    # file in a game's bin dir fails its integrity check. the appid is passed
+    # to neutron-run in the environment instead.
     note "installed to $target"
 
     local exe; exe="$(find_game_exe "$target")"
@@ -916,10 +937,14 @@ cmd_get_live() {
         rm -rf "$staging"
     done <<< "$rows"
 
-    echo "$appid" > "$target/steam_appid.txt"
+    # deliberately NOT writing steam_appid.txt into the game folder: an extra
+    # file in a game's bin dir fails its integrity check. the appid is passed
+    # to neutron-run in the environment instead.
     exe="$(find_game_exe "$target")"
     mkdir -p "$NEUTRON_HOME/games/.map"; echo "$exe" > "$NEUTRON_HOME/games/.map/$appid"
-    echo "$appid" > "$(dirname "$exe")/steam_appid.txt"
+    # deliberately NOT writing steam_appid.txt into the game folder: an extra
+    # file in a game's bin dir fails its integrity check. the appid is passed
+    # to neutron-run in the environment instead.
 }
 
 # safety net: if a download run was interrupted hard, put steam back
@@ -945,6 +970,22 @@ cmd_remove() {
 
 REPO_URL="https://api.github.com/repos/mont127/Neutron/releases/latest"
 
+# github allows 60 unauthenticated calls an hour, and this runs on every launch,
+# so the answer is cached for an hour. system curl, not python: framework pythons
+# have no CA bundle and fail TLS. the User-Agent is required by the api.
+latest_tag() {
+    local cache="$NEUTRON_HOME/.release-cache" age tag
+    if [ -f "$cache" ]; then
+        age=$(( $(date +%s) - $(stat -f %m "$cache" 2>/dev/null || echo 0) ))
+        if [ "$age" -lt 3600 ]; then cat "$cache"; return 0; fi
+    fi
+    tag="$(/usr/bin/curl -fsSL --max-time 15 -H "User-Agent: Neutron" "$REPO_URL" 2>/dev/null \
+           | sed -n 's/.*"tag_name"[^"]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+    # only cache a real answer, so being offline does not pin an empty result
+    [ -n "$tag" ] && { mkdir -p "$NEUTRON_HOME"; printf '%s' "$tag" > "$cache"; }
+    printf '%s' "$tag"
+}
+
 installed_version() { cat "$NEUTRON_HOME/version" 2>/dev/null || echo 0; }
 installed_engine()  { cat "$NEUTRON_HOME/engine" 2>/dev/null || echo 0; }
 
@@ -964,8 +1005,7 @@ cmd_update() {
     [ "${1:-}" = "--check" ] && check=1
     cur="$(installed_version)"
 
-    tag="$(curl -fsSL --max-time 20 "$REPO_URL" 2>/dev/null \
-           | sed -n 's/.*"tag_name"[^"]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+    tag="$(latest_tag)"
     [ -n "$tag" ] || { [ "$check" = 1 ] && return 1; die "could not reach github"; }
 
     if ! newer "$cur" "$tag"; then

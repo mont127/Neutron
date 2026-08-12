@@ -32,12 +32,31 @@ while :; do
     fi
 done &
 
-# once a day, see whether a newer release exists. only the scripts update; the
-# engine is left alone, so this is a small download and never touches a game
-# mid-session. turn it off with: neutron autoupdate off
+# check the release on every launch, then hourly. the lookup itself is cached for
+# an hour inside neutron, so this is one github call an hour at most. only the
+# scripts update; the engine is left alone. turn it off with:
+#   neutron autoupdate off
+notify() {
+    /usr/bin/osascript -e "display notification \"$1\" with title \"Neutron\"" \
+        >/dev/null 2>&1 || true
+}
+
 while :; do
-    sleep 86400
-    [ "$(cat "$N/autoupdate" 2>/dev/null || echo 1)" = 1 ] || continue
-    pgrep -x steam_osx >/dev/null 2>&1 && continue
-    [ -x "$N/app/neutron" ] && "$N/app/neutron" update >/dev/null 2>&1
+    if [ -x "$N/app/neutron" ]; then
+        new="$("$N/app/neutron" update --check 2>/dev/null || true)"
+        if [ -n "$new" ]; then
+            if [ "$(cat "$N/autoupdate" 2>/dev/null || echo 1)" = 1 ]; then
+                # never swap the scripts under a running steam session
+                if ! pgrep -x steam_osx >/dev/null 2>&1; then
+                    if "$N/app/neutron" update >/dev/null 2>&1; then
+                        notify "Updated to v$new"
+                    fi
+                fi
+            elif [ "$(cat "$N/.notified" 2>/dev/null)" != "$new" ]; then
+                printf '%s' "$new" > "$N/.notified"
+                notify "v$new is available. Open Neutron to update."
+            fi
+        fi
+    fi
+    sleep 3600
 done

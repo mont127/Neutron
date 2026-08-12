@@ -40,9 +40,14 @@ wine="$wine_dir/wine"
 [ $# -ge 1 ] || { echo "usage: neutron-run <game.exe> [args...]" >&2; exit 2; }
 exe="$1"; shift
 
-appid=""
+# the appid comes from steam's own launch entry. do NOT write steam_appid.txt
+# into the game folder: an extra file in a game's bin dir fails its integrity
+# check (cs2 reports "some of your files have been modified"). steam_api reads
+# SteamAppId from the environment just as happily.
+appid="${NEUTRON_APPID:-}"
 gdir="$(dirname "$exe")"
-[ -f "$gdir/steam_appid.txt" ] && appid="$(tr -dc 0-9 < "$gdir/steam_appid.txt" || true)"
+[ -n "$appid" ] || { [ -f "$gdir/steam_appid.txt" ] \
+    && appid="$(tr -dc 0-9 < "$gdir/steam_appid.txt" || true)"; }
 
 # Unity 2019-era Mono (mono-2.0-bdwgc.dll with no PE TLS directory) JITs dynamic
 # TLS as a literal "mov rax,gs:[0x1480+idx*8]", i.e. a raw TEB.TlsSlots read.
