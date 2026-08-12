@@ -534,9 +534,10 @@ cmd_set() {
 
 
 # has this app got our macOS launch entry right now?
+# up to date, not merely present: an overlay written by an older neutron gets
+# refreshed so fixes (like the 64-bit declaration) actually reach existing games
 overlay_present() {
-    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" show "$APPINFO" "$1" 2>/dev/null \
-        | grep -q "launch 9000"
+    PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" check "$APPINFO" "$1" >/dev/null 2>&1
 }
 
 # re-apply the overlay to any windows game that is missing it. safe to run over

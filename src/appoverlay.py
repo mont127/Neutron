@@ -124,6 +124,32 @@ def main(argv):
         describe(root)
         return 0
 
+    # "is this app fully up to date with the current overlay?" - exit 0 if yes.
+    # checks more than mere presence, so an overlay written by an older neutron
+    # gets refreshed instead of being left half-done.
+    if action == "check":
+        config = get(root, "config") or []
+        launches = get(config, "launch") or []
+        i = find(launches, LAUNCH_KEY)
+        if i < 0:
+            return 1
+        cfg = get(launches[i][2], "config") or []
+        if str(get(cfg, "osarch") or "") != "64":
+            return 1
+        common = get(root, "common") or []
+        if "macos" not in str(get(common, "oslist") or ""):
+            return 1
+        if str(get(common, "osarch") or "") != "64":
+            return 1
+        # any of the game's own entries still matching every platform?
+        for t, key, entry in launches:
+            if t != MAP or key == LAUNCH_KEY:
+                continue
+            c = get(entry, "config") or []
+            if not str(get(c, "oslist") or "").strip():
+                return 1
+        return 0
+
     if action == "enable":
         shim = argv[4] if len(argv) > 4 else DEFAULT_SHIM
         print("before:")
