@@ -15,26 +15,6 @@ runs a shim that launches the game under wine.
 This repo is the installer only. The unified wine engine is shipped separately
 inside a `.app` bundle and is not part of this source tree.
 
-## why there is no native Install button (yet)
-
-Proton is not a trick: Valve built compatibility-tool support into the Steam
-client. A tool declares itself in `compatibilitytools.d/`, the client maps
-app to tool in `CompatToolMapping`, and from then on the client itself offers
-Install for Windows-only titles and launches them through the tool.
-
-The macOS client ships that entire machinery — `CCompatManager`,
-`CompatToolMapping`, `compatibilitytools.d`, the toolmanifest v2 loader, even the
-string "Enable Steam Play for supported titles" — and its `compat_log.txt` has
-real entries from older builds. On the current client it is dormant: register a
-tool and map it correctly and the client round-trips the registry key but never
-runs the compat manager, never writes `compat_log.txt`, and never renders the
-Steam Play toggle (no JS in the macOS UI bundle references it). The
-`-compat-disable-filtering` flag does not wake it either.
-
-Neutron still registers itself as a proper compat tool, so if Valve ever turns
-this on it works with no changes. Until then the Play button comes from a
-non-Steam shortcut, which is what `add` sets up.
-
 ## the policy: macOS first, Neutron for the rest
 
 macOS Steam already downloads and runs a game's macOS build whenever it has one,
