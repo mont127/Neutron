@@ -4,10 +4,11 @@
 #
 #   make-icon.py [Logo.png] [out-dir] [Wordmark.png]
 #
-# the artwork is flat purple on flat grey. the grey is keyed out on the green
-# channel (purple has G=0, the grey has G=183) and the edge pixels are
-# un-premultiplied, so antialiased strokes keep their real colour instead of
-# picking up a grey halo.
+# the artwork is flat colour on flat grey. coverage is taken as the largest
+# per-channel drop from the background, then the pixel is un-premultiplied
+# against that background, so antialiased strokes keep their real colour instead
+# of picking up a grey halo. exact for any ink with a channel at 0, which the
+# red/green/blue rings all have.
 
 import sys, os, subprocess
 from PIL import Image, ImageDraw
@@ -28,13 +29,14 @@ def keyed(path):
     src, dst = im.load(), out.load()
     for y in range(h):
         for x in range(w):
-            r, g, b = src[x, y]
-            a = (BG[1] - g) / BG[1]
+            p = src[x, y]
+            a = max((BG[i] - p[i]) / BG[i] for i in range(3))
             if a <= 0.004:
                 dst[x, y] = (0, 0, 0, 0)
                 continue
             if a > 1.0:
                 a = 1.0
+            r, g, b = p
             # undo the blend against the grey so edges are not milky
             cr = (r - BG[0] * (1 - a)) / a
             cg = (g - BG[1] * (1 - a)) / a
@@ -77,7 +79,14 @@ def main():
         sys.exit("no %s" % SRC)
     os.makedirs(OUT, exist_ok=True)
 
-    mark = square(keyed(SRC)).resize((WORK, WORK), Image.LANCZOS)
+    ink = keyed(SRC)
+    # tight, original aspect, for the readme
+    tight = ink.crop(ink.getbbox()) if ink.getbbox() else ink
+    tight = tight.resize((tight.width * 3, tight.height * 3), Image.LANCZOS)
+    tight.save(os.path.join(OUT, "logo.png"))
+    print("  logo.png (%dx%d)" % tight.size)
+
+    mark = square(ink).resize((WORK, WORK), Image.LANCZOS)
     mark.resize((512, 512), Image.LANCZOS).save(os.path.join(OUT, "mark.png"))
     print("  mark.png")
 

@@ -1,12 +1,7 @@
 <h1 align="center">Neutron</h1>
 
 <p align="center">
-  <img
-    width="220"
-    height="217"
-    alt="Logo"
-    src="https://github.com/user-attachments/assets/099ab753-e42d-47a1-add6-0fc4549039b2"
-  />
+  <img src="ui/assets/logo.png" alt="Neutron" width="200">
 </p>
 
 <p align="center">
