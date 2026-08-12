@@ -34,8 +34,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# per-game settings written by "neutron set", then the global config
-[ -f "$N/games/.cfg/$appid" ] && . "$N/games/.cfg/$appid"
+# settings precedence: steam's launch options (already parsed above) beat the
+# per-game file, which beats the global defaults from the neutron app
+for f in "$N/defaults" "$N/games/.cfg/$appid"; do
+    [ -f "$f" ] || continue
+    # shellcheck disable=SC1090
+    while IFS= read -r line; do
+        case "$line" in export\ *=*) ;; *) continue ;; esac
+        k="${line#export }"; k="${k%%=*}"
+        # a value already in the environment came from steam, keep it
+        [ -n "$(eval "printf %s \"\${$k:-}\"")" ] || eval "$line"
+    done < "$f"
+done
 
 steam_root="$HOME/Library/Application Support/Steam"
 

@@ -1,313 +1,259 @@
-// Neutron's window. Steam owns Play; this owns everything before that:
-// which of your games are windows-only, and installing them.
+// The Neutron installer. You open it once; after that Neutron lives inside
+// Steam and this app is never needed again.
 
 import SwiftUI
 import AppKit
 
-// MARK: - model
-
-struct Game: Identifiable, Hashable {
-    let appid: String
-    let name: String
-    let verdict: String      // native-ok | windows-only | suspect | unknown
-    var installed: Bool
-
-    var id: String { appid }
-
-    var isWindows: Bool { verdict == "windows-only" || verdict == "suspect" }
-
-    var statusText: String {
-        if verdict == "native-ok" { return "Native macOS" }
-        if installed { return "Ready in Steam" }
-        if verdict == "suspect" { return "Mac build looks stale" }
-        return "Windows only"
-    }
-
-    var statusColor: Color {
-        if verdict == "native-ok" { return .secondary }
-        if installed { return .green }
-        return .orange
-    }
+enum Step: Equatable {
+    case checking, notInstalled, steamOpen, working, done, failed(String)
 }
 
-// MARK: - shelling out to the neutron script
+final class Installer: ObservableObject {
+    @Published var step: Step = .checking
+    @Published var log: [String] = []
+    @Published var windowsGames = 0
+    @Published var enabledGames = 0
+    @Published var steamRunning = false
 
-final class Neutron: ObservableObject {
-    @Published var games: [Game] = []
-    @Published var busy = false
-    @Published var busyAppid: String?
-    @Published var playing: String?
-    @Published var logLines: [String] = []
-    @Published var loadFailed: String?
-
-    let steamDir = ("~/Library/Application Support/Steam" as NSString).expandingTildeInPath
-    let gamesDir = ("~/Library/Application Support/Neutron/games" as NSString).expandingTildeInPath
+    let home = NSHomeDirectory()
+    var neutronHome: String { home + "/Library/Application Support/Neutron" }
 
     var script: String {
-        if let env = ProcessInfo.processInfo.environment["NEUTRON_SCRIPT"] { return env }
+        if let e = ProcessInfo.processInfo.environment["NEUTRON_SCRIPT"] { return e }
         let bundled = Bundle.main.bundlePath + "/Contents/Resources/installer/neutron"
         if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        return (("~/Neutron-repo/neutron") as NSString).expandingTildeInPath
+        return home + "/Neutron-repo/neutron"
     }
 
-    // the exe we installed for an appid, if any
-    func exePath(_ appid: String) -> String? {
-        let map = gamesDir + "/.map/" + appid
-        if let s = try? String(contentsOfFile: map, encoding: .utf8) {
-            let p = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !p.isEmpty && FileManager.default.isReadableFile(atPath: p) { return p }
-        }
-        return nil
-    }
+    // global defaults every game inherits unless its own Launch Options override
+    @Published var backend = "d3dmetal"
+    @Published var metalHUD = false
+    @Published var msync = true
 
-    func reload() {
-        loadFailed = nil
-        DispatchQueue.global().async {
-            let out = self.run(self.script, ["scan-machine"])
-            var parsed: [Game] = []
-            for line in out.split(separator: "\n") {
-                let f = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-                guard f.count >= 5 else { continue }
-                // installed for us means: we have a windows exe to launch
-                let ours = self.exePath(f[0]) != nil
-                parsed.append(Game(appid: f[0], name: f[4], verdict: f[1],
-                                   installed: ours || (f[1] == "native-ok" && f[3] == "1")))
+    var defaultsPath: String { neutronHome + "/defaults" }
+
+    func loadDefaults() {
+        guard let t = try? String(contentsOfFile: defaultsPath, encoding: .utf8) else { return }
+        for line in t.split(separator: "\n") {
+            let kv = line.split(separator: "=", maxSplits: 1).map(String.init)
+            guard kv.count == 2 else { continue }
+            let v = kv[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            switch kv[0].replacingOccurrences(of: "export ", with: "") {
+            case "MNC_GAME_BACKEND": backend = v
+            case "NEUTRON_HUD": metalHUD = (v == "1")
+            case "NEUTRON_MSYNC": msync = (v != "0")
+            default: break
             }
-            let sorted = parsed.sorted {
-                if $0.isWindows != $1.isWindows { return $0.isWindows }
-                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    func saveDefaults() {
+        let body = """
+        export MNC_GAME_BACKEND=\(backend)
+        export NEUTRON_HUD=\(metalHUD ? "1" : "0")
+        export NEUTRON_MSYNC=\(msync ? "1" : "0")
+        """
+        try? FileManager.default.createDirectory(atPath: neutronHome,
+              withIntermediateDirectories: true)
+        try? body.write(toFile: defaultsPath, atomically: true, encoding: .utf8)
+    }
+
+    var isInstalled: Bool {
+        FileManager.default.fileExists(atPath: neutronHome + "/config")
+    }
+
+    func refresh() {
+        steamRunning = !run("/usr/bin/pgrep", ["-x", "steam_osx"]).isEmpty
+        let scan = run("/bin/bash", [script, "scan-machine"])
+        var win = 0
+        for line in scan.split(separator: "\n") {
+            let f = line.split(separator: "|", omittingEmptySubsequences: false)
+            if f.count >= 5 && f[2] == "neutron" { win += 1 }
+        }
+        windowsGames = win
+        loadDefaults()
+        if step == .checking { step = isInstalled ? .done : .notInstalled }
+    }
+
+    func install() {
+        step = .working
+        log = ["Setting up Neutron…"]
+        DispatchQueue.global().async {
+            self.stream("/bin/bash", [self.script, "install"])
+            // with steam closed we can enable every windows game right now;
+            // otherwise the watcher does it the moment steam quits
+            if !self.steamRunning {
+                self.append("Enabling your Windows games…")
+                self.stream("/bin/bash", [self.script, "enable-all"])
             }
             DispatchQueue.main.async {
-                self.games = sorted
-                if sorted.isEmpty { self.loadFailed = "No games found. Is Steam installed and has it run at least once?" }
+                self.step = self.isInstalled ? .done : .failed("Setup did not complete — see the log.")
+                self.refresh()
             }
         }
     }
 
-    func install(_ game: Game) {
-        guard !busy else { return }
-        busy = true
-        busyAppid = game.appid
-        logLines = ["Getting \(game.name)…"]
-        DispatchQueue.global().async {
-            self.stream(self.script, ["get", game.appid]) { line in
-                DispatchQueue.main.async {
-                    self.logLines.append(line)
-                    if self.logLines.count > 400 { self.logLines.removeFirst() }
-                }
-            }
-            DispatchQueue.main.async {
-                self.busy = false
-                self.busyAppid = nil
-                self.reload()
-            }
+    private func append(_ s: String) {
+        DispatchQueue.main.async {
+            self.log.append(s)
+            if self.log.count > 300 { self.log.removeFirst() }
         }
-    }
-
-    func play(_ game: Game) {
-        guard let exe = exePath(game.appid) else { return }
-        playing = game.appid
-        logLines = ["Launching \(game.name)…"]
-        DispatchQueue.global().async {
-            let runner = ("~/Library/Application Support/Neutron/bin/neutron-run" as NSString).expandingTildeInPath
-            self.stream(runner, [exe]) { line in
-                DispatchQueue.main.async {
-                    self.logLines.append(line)
-                    if self.logLines.count > 400 { self.logLines.removeFirst() }
-                }
-            }
-            DispatchQueue.main.async {
-                self.playing = nil
-                self.logLines.append("\(game.name) exited.")
-            }
-        }
-    }
-
-    func artwork(_ appid: String) -> NSImage? {
-        let dir = steamDir + "/appcache/librarycache/" + appid
-        for name in ["library_600x900_2x.jpg", "library_600x900.jpg", "header.jpg"] {
-            let p = dir + "/" + name
-            if let img = NSImage(contentsOfFile: p) { return img }
-        }
-        return nil
     }
 
     @discardableResult
     private func run(_ cmd: String, _ args: [String]) -> String {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [cmd] + args
+        p.executableURL = URL(fileURLWithPath: cmd)
+        p.arguments = args
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = Pipe()
         do { try p.run() } catch { return "" }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let d = pipe.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        return String(data: d, encoding: .utf8) ?? ""
     }
 
-    private func stream(_ cmd: String, _ args: [String], _ onLine: @escaping (String) -> Void) {
+    private func stream(_ cmd: String, _ args: [String]) {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = [cmd] + args
+        p.executableURL = URL(fileURLWithPath: cmd)
+        p.arguments = args
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
-        var buffer = ""
+        var buf = ""
         pipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
             guard !d.isEmpty, let s = String(data: d, encoding: .utf8) else { return }
-            buffer += s
-            while let nl = buffer.firstIndex(of: "\n") {
-                let line = String(buffer[buffer.startIndex..<nl])
-                buffer = String(buffer[buffer.index(after: nl)...])
-                let clean = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !clean.isEmpty { onLine(clean) }
+            buf += s
+            while let nl = buf.firstIndex(of: "\n") {
+                let line = String(buf[buf.startIndex..<nl]).trimmingCharacters(in: .whitespaces)
+                buf = String(buf[buf.index(after: nl)...])
+                if !line.isEmpty { self.append(line) }
             }
         }
-        do { try p.run() } catch { onLine("could not run \(cmd)"); return }
+        do { try p.run() } catch { append("could not run \(cmd)"); return }
         p.waitUntilExit()
         pipe.fileHandleForReading.readabilityHandler = nil
     }
 }
 
-// MARK: - views
-
-struct Cover: View {
-    let image: NSImage?
+struct Bullet: View {
+    let text: String
     var body: some View {
-        Group {
-            if let image {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-            } else {
-                RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.18))
-            }
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green).font(.system(size: 12))
+            Text(text).font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
-        .frame(width: 46, height: 66)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
-}
-
-struct Row: View {
-    let game: Game
-    let art: NSImage?
-    let busy: Bool
-    let playing: Bool
-    let onInstall: () -> Void
-    let onPlay: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Cover(image: art)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(game.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                Text(game.statusText).font(.system(size: 11)).foregroundStyle(game.statusColor)
-            }
-            Spacer()
-            if game.verdict == "native-ok" {
-                Text("Steam handles it").font(.system(size: 11)).foregroundStyle(.tertiary)
-            } else if game.installed {
-                if playing {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Running").font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Button {
-                        onPlay()
-                    } label: {
-                        Label("Play", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent).controlSize(.small).tint(.green)
-                }
-            } else if busy {
-                ProgressView().controlSize(.small)
-            } else {
-                Button("Install", action: onInstall).buttonStyle(.borderedProminent).controlSize(.small)
-            }
-        }
-        .padding(.vertical, 5)
     }
 }
 
 struct ContentView: View {
-    @StateObject private var n = Neutron()
-    @State private var search = ""
-
-    var windowsGames: [Game] { n.games.filter { $0.isWindows } }
-    var macGames: [Game] { n.games.filter { !$0.isWindows } }
-
-    func filtered(_ list: [Game]) -> [Game] {
-        search.isEmpty ? list : list.filter { $0.name.localizedCaseInsensitiveContains(search) }
-    }
+    @StateObject private var m = Installer()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Neutron").font(.system(size: 15, weight: .semibold))
-                    Text("Windows games in your Steam library")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-                Spacer()
-                TextField("Search", text: $search).textFieldStyle(.roundedBorder).frame(width: 170)
-                Button { n.reload() } label: { Image(systemName: "arrow.clockwise") }
-                    .disabled(n.busy)
+            VStack(spacing: 6) {
+                Image(systemName: "gamecontroller.fill")
+                    .font(.system(size: 34)).foregroundStyle(.tint)
+                Text("Neutron").font(.system(size: 22, weight: .semibold))
+                Text("Windows games, inside your Steam library")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
-            .padding(12)
+            .frame(maxWidth: .infinity).padding(.top, 26).padding(.bottom, 18)
+
             Divider()
 
-            if let err = n.loadFailed {
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle").font(.title2).foregroundStyle(.orange)
-                    Text(err).font(.system(size: 12)).multilineTextAlignment(.center)
-                }.frame(maxWidth: .infinity, maxHeight: .infinity).padding()
-            } else {
-                List {
-                    if !filtered(windowsGames).isEmpty {
-                        Section("Runs through Neutron") {
-                            ForEach(filtered(windowsGames)) { g in
-                                Row(game: g, art: n.artwork(g.appid),
-                                    busy: n.busyAppid == g.appid,
-                                    playing: n.playing == g.appid,
-                                    onInstall: { n.install(g) },
-                                    onPlay: { n.play(g) })
-                            }
-                        }
+            VStack(alignment: .leading, spacing: 9) {
+                switch m.step {
+                case .done:
+                    Label("Neutron is installed", systemImage: "checkmark.seal.fill")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
+                    Bullet(text: "\(m.windowsGames) Windows games can install and play from Steam.")
+                    Bullet(text: "New games are picked up on their own — nothing to run again.")
+                    if m.steamRunning {
+                        Text("Quit Steam once to finish enabling your games.")
+                            .font(.system(size: 12)).foregroundStyle(.orange)
                     }
-                    if !filtered(macGames).isEmpty {
-                        Section("Native macOS — Steam runs these itself") {
-                            ForEach(filtered(macGames)) { g in
-                                Row(game: g, art: n.artwork(g.appid), busy: false,
-                                    playing: false, onInstall: {}, onPlay: {})
-                            }
+
+                    Divider().padding(.vertical, 4)
+                    Text("Settings").font(.system(size: 12, weight: .semibold))
+                    HStack {
+                        Text("Graphics").font(.system(size: 12))
+                        Spacer()
+                        Picker("", selection: $m.backend) {
+                            Text("D3DMetal").tag("d3dmetal")
+                            Text("DXMT").tag("dxmt")
+                            Text("DXVK").tag("dxvk")
+                            Text("OpenGL").tag("opengl")
                         }
+                        .labelsHidden().pickerStyle(.menu).frame(width: 130)
+                        .onChange(of: m.backend) { _, _ in m.saveDefaults() }
+                    }
+                    Toggle("Metal performance HUD", isOn: $m.metalHUD)
+                        .font(.system(size: 12))
+                        .onChange(of: m.metalHUD) { _, _ in m.saveDefaults() }
+                    Toggle("msync (faster, leave on unless a game misbehaves)", isOn: $m.msync)
+                        .font(.system(size: 12))
+                        .onChange(of: m.msync) { _, _ in m.saveDefaults() }
+                    Text("Per game, override these in Steam \u{2192} Properties \u{2192} Launch Options, e.g. backend=dxmt hud=1")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                default:
+                    Text("This will set up Neutron so your Windows games get a working Install and Play button in Steam itself.")
+                        .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
+                    Bullet(text: "Your Mac games are never touched.")
+                    Bullet(text: "Steam does the downloading; Neutron runs the game.")
+                    Bullet(text: "Nothing to open afterwards — this app is only needed once.")
+                    if m.windowsGames > 0 {
+                        Bullet(text: "\(m.windowsGames) Windows games found in your library.")
                     }
                 }
-                .listStyle(.inset)
             }
+            .padding(16)
 
-            if n.busy || !n.logLines.isEmpty {
+            if !m.log.isEmpty {
                 Divider()
-                ScrollViewReader { proxy in
+                ScrollViewReader { p in
                     ScrollView {
                         VStack(alignment: .leading, spacing: 1) {
-                            ForEach(Array(n.logLines.enumerated()), id: \.offset) { i, l in
+                            ForEach(Array(m.log.enumerated()), id: \.offset) { i, l in
                                 Text(l).font(.system(size: 10, design: .monospaced))
                                     .foregroundStyle(.secondary).id(i)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                             }
                         }.padding(8)
                     }
-                    .frame(height: 110)
-                    .onChange(of: n.logLines.count) { _, c in
-                        withAnimation { proxy.scrollTo(c - 1, anchor: .bottom) }
-                    }
+                    .frame(height: 96)
+                    .onChange(of: m.log.count) { _, c in withAnimation { p.scrollTo(c - 1, anchor: .bottom) } }
                 }
             }
+
+            Divider()
+            HStack {
+                if case .failed(let why) = m.step {
+                    Text(why).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
+                }
+                Spacer()
+                if m.step == .working {
+                    ProgressView().controlSize(.small)
+                    Text("Working…").font(.system(size: 12)).foregroundStyle(.secondary)
+                } else if m.step == .done {
+                    Button("Open Steam") {
+                        NSWorkspace.shared.launchApplication("Steam")
+                    }.controlSize(.large)
+                } else {
+                    Button("Install Neutron") { m.install() }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                }
+            }
+            .padding(14)
         }
-        .frame(minWidth: 620, minHeight: 460)
-        .onAppear { n.reload() }
+        .frame(width: 470)
+        .onAppear { m.refresh() }
     }
 }
 
