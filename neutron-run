@@ -203,11 +203,27 @@ run() {
     arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$@"' bash "$@"
 }
 
+# steam's Stop button signals the process it launched, which is this script. the
+# game is several levels below (arch -> bash -> wine -> exe), so killing us alone
+# leaves it running. take the whole tree down with us.
+kill_tree() {
+    local p="$1" c
+    for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
+    kill -TERM "$p" 2>/dev/null || true
+}
+
+game_pid=""
 stubpid=""
+cleanup() {
+    [ -n "$game_pid" ] && kill_tree "$game_pid"
+    [ -n "$stubpid" ] && kill_tree "$stubpid"
+}
+trap 'cleanup; exit 143' TERM INT HUP
+trap cleanup EXIT
+
 if ! pgrep -f "$stub" >/dev/null 2>&1; then
     run "$wine" "$stub" >/dev/null 2>&1 &
     stubpid=$!
-    trap '[ -n "$stubpid" ] && kill "$stubpid" 2>/dev/null || true' EXIT
     sleep 4
 fi
 
@@ -215,4 +231,6 @@ fi
 # gate is getenv() != NULL, so unset it rather than exporting a 0.
 if [ "$hack22_off" = 1 ]; then export MNC_HACK22_OFF=1; else unset MNC_HACK22_OFF; fi
 
-run "$wine" "$exe" "$@"
+run "$wine" "$exe" "$@" &
+game_pid=$!
+wait "$game_pid"

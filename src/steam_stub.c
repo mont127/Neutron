@@ -56,8 +56,11 @@ int main(int argc, char **argv)
     {
         set_dword(active, "pid", pid);
         set_dword(active, "ActiveUser", 1);
-        set_str(active, "SteamClientDll", "C:\\windows\\syswow64\\lsteamclient.dll");
-        set_str(active, "SteamClientDll64", "C:\\windows\\system32\\lsteamclient.dll");
+        /* proton presents the bridge under steam's own name and path rather than
+         * as lsteamclient.dll in system32. keep the same layout: a game (and
+         * anything inspecting the process) then sees the module it expects. */
+        set_str(active, "SteamClientDll", "C:\\Program Files (x86)\\Steam\\steamclient.dll");
+        set_str(active, "SteamClientDll64", "C:\\Program Files (x86)\\Steam\\steamclient64.dll");
         set_str(active, "Universe", "Public");
         RegCloseKey(active);
     }

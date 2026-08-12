@@ -117,6 +117,16 @@ stage_bridge() {
     fi
 
     # into the prefix so LoadLibrary and the registry path find the pe
+    # proton copies the bridge into C:\Program Files (x86)\Steam under steam's own
+    # dll names; a game then loads a module called steamclient64.dll from the
+    # path it expects instead of an unknown lsteamclient.dll in system32
+    local sdir="$prefix/drive_c/Program Files (x86)/Steam"
+    mkdir -p "$sdir"
+    cp "$src/x86_64-windows/lsteamclient.dll" "$sdir/steamclient64.dll"
+    [ -f "$src/i386-windows/lsteamclient.dll" ] && \
+        cp "$src/i386-windows/lsteamclient.dll" "$sdir/steamclient.dll"
+    [ -f "$BIN/steam.exe" ] && cp "$BIN/steam.exe" "$sdir/steam.exe"
+
     cp "$src/x86_64-windows/lsteamclient.dll" "$prefix/drive_c/windows/system32/lsteamclient.dll"
     [ -f "$src/i386-windows/lsteamclient.dll" ] && \
         cp "$src/i386-windows/lsteamclient.dll" "$prefix/drive_c/windows/syswow64/lsteamclient.dll"
