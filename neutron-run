@@ -44,6 +44,42 @@ appid=""
 gdir="$(dirname "$exe")"
 [ -f "$gdir/steam_appid.txt" ] && appid="$(tr -dc 0-9 < "$gdir/steam_appid.txt" || true)"
 
+# Unity 2019-era Mono (mono-2.0-bdwgc.dll with no PE TLS directory) JITs dynamic
+# TLS as a literal "mov rax,gs:[0x1480+idx*8]", i.e. a raw TEB.TlsSlots read.
+# MNC HACK 22 leaves gs.base on Apple's pthread TSD and mirrors only gs:0x30/
+# 0x58/0x60, so that read returns 0, Mono derefs 0x10, and its own vectored
+# handler re-faults on the same instruction one frame deeper until the 1 MB stack
+# is gone ("corrupted thread state, aborting thread"). Unity dies before it ever
+# prints "Initialize engine version". Turn HACK 22 off for exactly those games.
+# The newer Mono in Unity 2020+ (REPO) reads TlsSlots through a base register,
+# which HACK 22 does serve, and it carries a PE TLS directory - that is the test.
+# Anything without MonoBleedingEdge (CS2, Galacticverse, every native game) never
+# reaches this code.
+mono_jit_needs_stock_gs() {
+    local dll="$1/MonoBleedingEdge/EmbedRuntime/mono-2.0-bdwgc.dll" lfanew off rva
+    [ -f "$dll" ] || return 1
+    lfanew="$(od -An -tu4 -j 60 -N4 "$dll" 2>/dev/null | tr -d ' ')"
+    [ -n "$lfanew" ] || return 1
+    # PE32+ optional header is 0x70 bytes before the data directory; entry 9 = TLS
+    off=$(( lfanew + 24 + 0x70 + 72 ))
+    rva="$(od -An -tu4 -j "$off" -N4 "$dll" 2>/dev/null | tr -d ' ')"
+    [ "${rva:-0}" = 0 ]
+}
+
+hack22_off=0
+case "${NEUTRON_HACK22_OFF:-auto}" in
+    1) hack22_off=1 ;;
+    0) hack22_off=0 ;;
+    *) mono_jit_needs_stock_gs "$gdir" && hack22_off=1 ;;
+esac
+if [ "$hack22_off" = 1 ] && [ "${MNC_GAME_BACKEND:-d3dmetal}" = d3dmetal ]; then
+    # stock gs.base swapping is what D3DMetal's Apple-framework TSD use conflicts
+    # with; with HACK 22 off these games die in GfxDevice on d3dmetal but run on
+    # dxvk. Same trade, one direction or the other - pick the one that boots.
+    echo "neutron: old-Mono Unity title, using stock gs.base + dxvk" >&2
+    MNC_GAME_BACKEND=dxvk
+fi
+
 pgrep -x steam_osx >/dev/null 2>&1 || open -ga Steam || true
 
 export WINEPREFIX="$prefix"
@@ -169,5 +205,9 @@ if ! pgrep -f "$stub" >/dev/null 2>&1; then
     trap '[ -n "$stubpid" ] && kill "$stubpid" 2>/dev/null || true' EXIT
     sleep 4
 fi
+
+# only the game, never the steam.exe stub (the bridge wants HACK 22). the wine
+# gate is getenv() != NULL, so unset it rather than exporting a 0.
+if [ "$hack22_off" = 1 ]; then export MNC_HACK22_OFF=1; else unset MNC_HACK22_OFF; fi
 
 run "$wine" "$exe" "$@"
