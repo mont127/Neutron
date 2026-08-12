@@ -87,15 +87,26 @@ def neutronize(root, appid, shim):
             set_str(cfg, "oslist", "windows")
             changed.append("launch %s pinned to windows (was any-platform)" % key)
 
-    if find(launches, LAUNCH_KEY) < 0:
+    # replace ours if it is already there, so fixes land on a re-run
+    old = find(launches, LAUNCH_KEY)
+    if old >= 0:
+        del launches[old]
+    if True:
         entry = [
             (STR, "executable", shim),
             (STR, "arguments", "--appid %d" % appid),
             (STR, "type", "default"),
-            (MAP, "config", [(STR, "oslist", "macos")]),
+            # say 64-bit explicitly: with no osarch steam assumes the macOS build
+            # is a legacy 32-bit one and warns that it cannot run
+            (MAP, "config", [(STR, "oslist", "macos"), (STR, "osarch", "64")]),
         ]
         launches.append((MAP, LAUNCH_KEY, entry))
-        changed.append("added macOS launch entry %s -> %s" % (LAUNCH_KEY, shim))
+        changed.append("%s macOS launch entry %s -> %s" % ("refreshed" if old >= 0 else "added", LAUNCH_KEY, shim))
+
+    # same reason, at the app level
+    if common is not None and str(get(common, "osarch") or "") != "64":
+        set_str(common, "osarch", "64")
+        changed.append("common.osarch = 64 (stops the 32-bit warning)")
     return changed
 
 
