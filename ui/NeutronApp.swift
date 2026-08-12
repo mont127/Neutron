@@ -113,10 +113,25 @@ final class Installer: ObservableObject {
     }
 
     @discardableResult
+    // the engine travels with the app as a zip. tell the installer where it is
+    // so the first install can unpack it instead of hunting for a local wine.
+    private var childEnv: [String: String] {
+        var e = ProcessInfo.processInfo.environment
+        let res = Bundle.main.bundlePath + "/Contents/Resources"
+        let zip = res + "/wine-unified-bundle.zip"
+        if FileManager.default.fileExists(atPath: zip) { e["NEUTRON_WINE_ZIP"] = zip }
+        let dir = res + "/wine-unified"
+        if FileManager.default.isExecutableFile(atPath: dir + "/loader/wine") {
+            e["NEUTRON_BUNDLED_WINE"] = dir
+        }
+        return e
+    }
+
     private func run(_ cmd: String, _ args: [String]) -> String {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cmd)
         p.arguments = args
+        p.environment = childEnv
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = Pipe()
@@ -130,6 +145,7 @@ final class Installer: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cmd)
         p.arguments = args
+        p.environment = childEnv
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = pipe
