@@ -49,7 +49,37 @@ export MNC_GAME_BACKEND="${MNC_GAME_BACKEND:-d3dmetal}"
 [ "${NEUTRON_ESYNC:-0}" = 1 ] && export WINEESYNC=1
 [ "${NEUTRON_HUD:-0}" = 1 ] && export MTL_HUD_ENABLED=1
 [ "${NEUTRON_DEBUG:-0}" = 1 ] && WINEDEBUG="+loaddll,+module,+seh"
-export MNC_DYLD="${MNC_DYLD:-/usr/local/lib}"
+# the unified wine finds its graphics + media dylibs through this path, and the
+# order matters: mnc-d3d (D3DMetal, libd3dshared) has to come first. with only
+# /usr/local/lib here, DXVK throws and DXMT renders a black screen. this mirrors
+# what macndcheese itself passes.
+_deps="$(dirname "$wine_dir")"
+if [ -z "${MNC_DYLD:-}" ]; then
+    MNC_DYLD="$wine_dir/mnc-d3d"
+    for d in \
+        /usr/local/opt/gstreamer/lib /usr/local/lib /usr/local/opt/freetype/lib \
+        /usr/local/opt/fontconfig/lib /usr/local/opt/gnutls/lib \
+        "$_deps/Wine Stable.app/Contents/Resources/wine/lib" \
+        /usr/local/opt/sdl2/lib /usr/local/opt/glib/lib /usr/local/opt/gettext/lib \
+        "$_deps/mnc-fonts" "$_deps/mnc-tls" "$_deps/mnc-vulkan" "$_deps/mnc-sdl" /usr/lib; do
+        MNC_DYLD="$MNC_DYLD:$d"
+    done
+fi
+export MNC_DYLD
+
+# the rest of what macndcheese passes a game. without these the same game that
+# runs there can black-screen or die here.
+export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winemenubuilder.exe=d;mscoree=;mshtml=;d3dcompiler_47=n,b;nvapi,nvapi64=}"
+export ROSETTA_ADVERTISE_AVX=1
+export MNC_STEAM_DXMT=1
+export MNC_SKIP_WOW64_INSTALL=1
+export MNC_CEF_SAFE_MODE=0
+export WINE_MAC_GL_CONTEXT_CLAMP=1
+export NoDefaultCurrentDirectoryInExePath=1
+export WINEDBG=-all
+export GST_PLUGIN_SYSTEM_PATH_1_0="${GST_PLUGIN_SYSTEM_PATH_1_0:-/usr/local/opt/gstreamer/lib/gstreamer-1.0}"
+export GST_PLUGIN_PATH="${GST_PLUGIN_PATH:-/usr/local/opt/gstreamer/lib/gstreamer-1.0}"
+export GST_PLUGIN_FEATURE_RANK="${GST_PLUGIN_FEATURE_RANK:-vtdec:NONE,vtdec_hw:NONE,avdec_h264:MAX,openh264dec:SECONDARY}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 
@@ -73,6 +103,7 @@ done
 for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
     if [ -f "$d/libd3dshared.dylib" ]; then
         export CX_APPLEGPT_LIBD3DSHARED_PATH="$d/libd3dshared.dylib"
+        export CX_APPLEGPTK_LIBD3DSHARED_PATH="$d/libd3dshared.dylib"
         break
     fi
 done
