@@ -347,7 +347,6 @@ cmd_install() {
     cat > "$CONFIG" <<EOF
 NEUTRON_WINE="$wine"
 NEUTRON_PREFIX="$prefix"
-MNC_GAME_BACKEND="d3dmetal"
 MNC_DYLD="/usr/local/lib"
 EOF
     note "wrote $CONFIG"

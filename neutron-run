@@ -5,7 +5,16 @@
 set -euo pipefail
 
 NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+# the config holds PATHS only. it used to also pin MNC_GAME_BACKEND, which
+# silently overrode the backend you picked on every launch - keep whatever the
+# caller passed in.
+_caller_backend="${MNC_GAME_BACKEND:-}"
 [ -f "$NEUTRON_HOME/config" ] && . "$NEUTRON_HOME/config"
+[ -n "$_caller_backend" ] && MNC_GAME_BACKEND="$_caller_backend"
+# running neutron-run directly (not via steam) should still honour the settings
+if [ -z "${MNC_GAME_BACKEND:-}" ] && [ -f "$NEUTRON_HOME/defaults" ]; then
+    . "$NEUTRON_HOME/defaults"
+fi
 
 wine_dir="${NEUTRON_WINE:-}"
 if [ -z "$wine_dir" ]; then
