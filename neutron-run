@@ -109,49 +109,32 @@ for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
 done
 [ -n "$appid" ] && export SteamAppId="$appid" SteamGameId="$appid"
 
-# Choose the renderer by putting that backend's dlls into the prefix under their
-# CANONICAL names (d3d11.dll, dxgi.dll, ...).
+# Renderer selection is the loader's job: MNC_GAME_BACKEND routes d3d11/dxgi to
+# that backend's build. Do NOT stage dlls under canonical names and force the
+# variable to d3dmetal - ntdll's D3DMetal fallback then answers d3d11 for every
+# choice, so every backend silently renders as D3DMetal.
 #
-# The obvious route - letting the loader redirect d3d11.dll to d3d11_dxmt.dll via
-# MNC_GAME_BACKEND - does not work for DXMT: wine matches a builtin dll by the
-# name it exports, not by its filename, so the renamed copy fails DllMain and
-# wine unloads it (error 1114, which shows up as a black screen). Loaded as
-# plain dxgi.dll the very same file is fine. macndcheese does it this way too.
-stage_backend_dlls() {
-    local pack="" d suffix f src sys32
-    for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
-        [ -d "$d" ] && { pack="$d"; break; }
-    done
-    [ -n "$pack" ] || return 0
-    sys32="$prefix/drive_c/windows/system32"
-    [ -d "$sys32" ] || return 0
-    case "${MNC_GAME_BACKEND:-d3dmetal}" in
-        dxmt)   suffix="_dxmt" ;;
-        dxvk)   suffix="_dxvk" ;;
-        opengl) suffix="_opengl" ;;
-        *)      suffix="_d3dm" ;;
-    esac
-    for f in d3d11 dxgi d3d10core d3d12 d3d10 d3d10_1; do
-        src=""
-        [ -f "$pack/$f$suffix.dll" ] && src="$pack/$f$suffix.dll"
-        # backends do not all cover every api; fall back to the d3dmetal build so
-        # the game still gets a working dll rather than a stale one
-        [ -z "$src" ] && [ -f "$pack/${f}_d3dm.dll" ] && src="$pack/${f}_d3dm.dll"
-        [ -z "$src" ] && [ -f "$pack/$f.dll" ] && src="$pack/$f.dll"
-        [ -n "$src" ] && cp -f "$src" "$sys32/$f.dll" 2>/dev/null || true
-    done
-    # anything we previously dropped beside the exe would shadow this - remove it
-    local base; base="$(dirname "$exe")"
-    if [ -w "$base" ]; then
-        for f in d3d11 dxgi d3d10core d3d12 d3d12core winemetal; do
-            rm -f "$base/$f.dll" 2>/dev/null || true
-        done
-    fi
-}
-stage_backend_dlls
-# the canonical dlls ARE the chosen backend now, so the loader must not rename
-# them on top of that
-export MNC_GAME_BACKEND=d3dmetal
+# Measured on this deps pack (test/d3dinfo.exe reports the adapter DXGI hands out):
+#   d3dmetal  works  - "AMD Compatibility Mode", feature level 11_0
+#   opengl    works  - wined3d, feature level 9_3
+#   dxvk      broken - d3d11_dxvk is real DXVK but the pack ships NO DXVK dxgi
+#                      (dxgi_dxvk.dll is wine's wined3d one), so DXVK rejects it:
+#                      "Adapter is not a DXVK adapter"
+#   dxmt      broken - d3d11_dxmt/dxgi_dxmt fail DllMain under those names
+#                      (error 1114) and wine unloads them = black screen
+# Rather than hand the game a renderer that cannot work, say so and use D3DMetal.
+case "${MNC_GAME_BACKEND:-d3dmetal}" in
+    dxmt)
+        echo "neutron: DXMT cannot load with this wine's dll pack (dxgi_dxmt fails to init) - using D3DMetal" >&2
+        export MNC_GAME_BACKEND=d3dmetal
+        ;;
+    dxvk)
+        if ! strings -a "$wine_dir/mnc-d3d/dxgi_dxvk.dll" 2>/dev/null | grep -qi dxvk; then
+            echo "neutron: DXVK is incomplete here (no DXVK dxgi in mnc-d3d) - using D3DMetal" >&2
+            export MNC_GAME_BACKEND=d3dmetal
+        fi
+        ;;
+esac
 
 # arch strips DYLD_*, so carry it in MNC_DYLD and re-export past the boundary
 run() {
