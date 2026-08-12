@@ -25,4 +25,4 @@ if [ -z "$exe" ] || [ ! -f "$exe" ]; then
 fi
 
 [ -n "$exe" ] && [ -f "$exe" ] || { echo "no exe after install" >> "$LOG"; exit 1; }
-exec "$N/bin/neutron-run" "$exe" >> "$LOG" 2>&1
+NEUTRON_APPID="$appid" exec "$N/bin/neutron-run" "$exe" >> "$LOG" 2>&1

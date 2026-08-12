@@ -16,6 +16,19 @@ import appinfo
 
 SHIM = """#!/bin/bash
 # neutron launcher. steam runs this, it hands the windows exe to wine.
+# steam launches this shim directly, so it never passes through neutron-launch:
+# the appid and the app's settings have to be applied here or the game starts
+# with no steam context (cs2 renders but ignores every click) and no hud.
+N="$HOME/Library/Application Support/Neutron"
+for f in "$N/defaults" "$N/games/.cfg/{appid}"; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in export\\ *=*) ;; *) continue ;; esac
+        k="${{line#export }}"; k="${{k%%=*}}"
+        [ -n "$(eval "printf %s \\"\\${{$k:-}}\\"")" ] || eval "$line"
+    done < "$f"
+done
+export NEUTRON_APPID={appid}
 exec {run} {exe} "$@"
 """
 
@@ -170,7 +183,7 @@ def main(argv):
         os.replace(shim_path, real_path)
 
     with open(shim_path, "w") as f:
-        f.write(SHIM.format(run=quote(neutron_run), exe=quote(real_path)))
+        f.write(SHIM.format(run=quote(neutron_run), exe=quote(real_path), appid=appid))
     os.chmod(shim_path, 0o755)
     print("shim: %s -> %s" % (shim_path, real_path))
 

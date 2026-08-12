@@ -36,7 +36,9 @@ done
 for f in "$N/defaults" "$N/games/.cfg/$appid"; do
     [ -f "$f" ] || continue
     # shellcheck disable=SC1090
-    while IFS= read -r line; do
+    # || [ -n "$line" ] keeps a final line with no trailing newline; without
+    # it the last setting in the file is silently dropped
+    while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in export\ *=*) ;; *) continue ;; esac
         k="${line#export }"; k="${k%%=*}"
         # a value already in the environment came from steam, keep it

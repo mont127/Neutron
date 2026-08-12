@@ -51,6 +51,7 @@ final class Installer: ObservableObject {
         let body = """
         export MNC_GAME_BACKEND=\(backend)
         export NEUTRON_HUD=\(metalHUD ? "1" : "0")
+
         """
         try? FileManager.default.createDirectory(atPath: neutronHome,
               withIntermediateDirectories: true)
