@@ -30,4 +30,14 @@ while :; do
         "$N/app/neutron" sync --quiet >/dev/null 2>&1
         pending=0
     fi
+done &
+
+# once a day, see whether a newer release exists. only the scripts update; the
+# engine is left alone, so this is a small download and never touches a game
+# mid-session. turn it off with: neutron autoupdate off
+while :; do
+    sleep 86400
+    [ "$(cat "$N/autoupdate" 2>/dev/null || echo 1)" = 1 ] || continue
+    pgrep -x steam_osx >/dev/null 2>&1 && continue
+    [ -x "$N/app/neutron" ] && "$N/app/neutron" update >/dev/null 2>&1
 done

@@ -13,6 +13,8 @@ final class Installer: ObservableObject {
     @Published var log: [String] = []
     @Published var windowsGames = 0
     @Published var enabledGames = 0
+    @Published var version = ""
+    @Published var updateTo = ""      // non-empty when a newer release exists
     @Published var steamRunning = false
 
     let home = NSHomeDirectory()
@@ -68,6 +70,11 @@ final class Installer: ObservableObject {
             if f.count >= 5 && f[2] == "neutron" { win += 1 }
         }
         windowsGames = win
+        version = (try? String(contentsOfFile: neutronHome + "/version", encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let latest = run("/bin/bash", [script, "update", "--check"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        updateTo = (latest.isEmpty || latest == version) ? "" : latest
         loadDefaults()
         if step == .checking { step = isInstalled ? .done : .notInstalled }
     }
@@ -102,6 +109,16 @@ final class Installer: ObservableObject {
         DispatchQueue.main.async {
             self.log.append(s)
             if self.log.count > 300 { self.log.removeFirst() }
+        }
+    }
+
+    // only the scripts update; the engine is left alone
+    func update() {
+        step = .working
+        log = []
+        DispatchQueue.global().async {
+            self.stream("/bin/bash", [self.script, "update"])
+            DispatchQueue.main.async { self.step = .done; self.refresh() }
         }
     }
 
@@ -221,6 +238,16 @@ struct ContentView: View {
                     }
 
                     Divider().padding(.vertical, 4)
+                    HStack {
+                        Text(m.version.isEmpty ? "Neutron" : "Neutron v\(m.version)")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                        Spacer()
+                        if !m.updateTo.isEmpty {
+                            Button("Update to v\(m.updateTo)") { m.update() }
+                                .controlSize(.small)
+                        }
+                    }
+
                     Text("Settings").font(.system(size: 12, weight: .semibold))
                     HStack {
                         Text("Graphics").font(.system(size: 12))

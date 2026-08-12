@@ -362,6 +362,8 @@ cmd_install() {
        "$SELF_DIR/src/neutron-watch" "$NEUTRON_HOME/app/" 2>/dev/null || \
         cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$NEUTRON_HOME/app/"
     chmod +x "$NEUTRON_HOME/app/neutron" "$NEUTRON_HOME/app/neutron-run"
+    cp "$SELF_DIR/VERSION" "$NEUTRON_HOME/version" 2>/dev/null || echo 0 > "$NEUTRON_HOME/version"
+    cp "$SELF_DIR/ENGINE"  "$NEUTRON_HOME/engine"  2>/dev/null || echo 0 > "$NEUTRON_HOME/engine"
     [ -f "$NEUTRON_HOME/app/neutron-watch" ] && chmod +x "$NEUTRON_HOME/app/neutron-watch"
     cp "$SELF_DIR/neutron-run" "$BIN/neutron-run"
     cp "$SELF_DIR/src/neutron-play" "$BIN/neutron-play"
@@ -936,6 +938,91 @@ cmd_remove() {
     echo "removed appid $appid"
 }
 
+# --- updates ------------------------------------------------------------------
+# only the scripts update themselves. the engine is 685 MB and changes rarely, so
+# when a release needs a newer one we say so and stop rather than pull it down
+# behind your back.
+
+REPO_URL="https://api.github.com/repos/mont127/Neutron/releases/latest"
+
+installed_version() { cat "$NEUTRON_HOME/version" 2>/dev/null || echo 0; }
+installed_engine()  { cat "$NEUTRON_HOME/engine" 2>/dev/null || echo 0; }
+
+newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$2" ]; }
+
+cmd_autoupdate() {
+    case "${1:-}" in
+        on)  echo 1 > "$NEUTRON_HOME/autoupdate"; note "auto-update on" ;;
+        off) echo 0 > "$NEUTRON_HOME/autoupdate"; note "auto-update off" ;;
+        *)   [ "$(cat "$NEUTRON_HOME/autoupdate" 2>/dev/null || echo 1)" = 1 ] \
+                 && echo "auto-update is on" || echo "auto-update is off" ;;
+    esac
+}
+
+cmd_update() {
+    local check=0 tag cur tmp
+    [ "${1:-}" = "--check" ] && check=1
+    cur="$(installed_version)"
+
+    tag="$(curl -fsSL --max-time 20 "$REPO_URL" 2>/dev/null \
+           | sed -n 's/.*"tag_name"[^"]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$tag" ] || { [ "$check" = 1 ] && return 1; die "could not reach github"; }
+
+    if ! newer "$cur" "$tag"; then
+        [ "$check" = 1 ] && return 1
+        echo "up to date (v$cur)"; return 0
+    fi
+    if [ "$check" = 1 ]; then echo "$tag"; return 0; fi
+
+    echo "updating $cur -> $tag"
+    tmp="$(mktemp -d)"
+    if ! curl -fsSL --max-time 120 "https://codeload.github.com/mont127/Neutron/tar.gz/refs/tags/v$tag" \
+         | tar xz -C "$tmp" --strip-components=1 2>/dev/null; then
+        rm -rf "$tmp"; die "download failed"
+    fi
+
+    # refuse anything that is not a working checkout, so a truncated or wrong
+    # tarball cannot replace a runtime that currently works
+    if [ ! -f "$tmp/neutron" ] || [ ! -f "$tmp/neutron-run" ] || [ ! -d "$tmp/src" ] \
+       || ! bash -n "$tmp/neutron" 2>/dev/null || ! bash -n "$tmp/neutron-run" 2>/dev/null; then
+        rm -rf "$tmp"; die "downloaded tree looks wrong, keeping the current one"
+    fi
+
+    # a tree with no ENGINE marker predates the check and says nothing about
+    # engine compatibility; only an explicit, different marker blocks the update
+    new_engine="$(cat "$tmp/ENGINE" 2>/dev/null || true)"
+    if [ -n "$new_engine" ] && [ "$new_engine" != "$(installed_engine)" ]; then
+        rm -rf "$tmp"
+        echo "  v$tag needs a newer engine than you have."
+        echo "  download the .dmg from github.com/mont127/Neutron/releases and re-install."
+        return 1
+    fi
+
+    rm -rf "$NEUTRON_HOME/app.prev"
+    [ -d "$NEUTRON_HOME/app" ] && cp -R "$NEUTRON_HOME/app" "$NEUTRON_HOME/app.prev"
+    mkdir -p "$NEUTRON_HOME/app"
+    cp -R "$tmp/src" "$NEUTRON_HOME/app/"
+    cp "$tmp/neutron" "$tmp/neutron-run" "$NEUTRON_HOME/app/"
+    [ -d "$tmp/vendor" ] && cp -R "$tmp/vendor" "$NEUTRON_HOME/app/"
+    cp "$tmp/neutron-run" "$BIN/neutron-run" 2>/dev/null || true
+    chmod +x "$NEUTRON_HOME/app/neutron" "$NEUTRON_HOME/app/neutron-run" "$BIN/neutron-run" 2>/dev/null || true
+    for s in neutron-play neutron-watch neutron-launch compat-entry; do
+        [ -f "$NEUTRON_HOME/app/src/$s" ] && chmod +x "$NEUTRON_HOME/app/src/$s"
+    done
+    echo "$tag" > "$NEUTRON_HOME/version"
+    rm -rf "$tmp"
+    note "updated to v$tag (previous kept in app.prev)"
+    note "run 'neutron apply' with steam closed if games need re-enabling"
+}
+
+cmd_rollback() {
+    [ -d "$NEUTRON_HOME/app.prev" ] || die "no previous version to roll back to"
+    rm -rf "$NEUTRON_HOME/app"
+    mv "$NEUTRON_HOME/app.prev" "$NEUTRON_HOME/app"
+    cp "$NEUTRON_HOME/app/neutron-run" "$BIN/neutron-run" 2>/dev/null || true
+    note "rolled back"
+}
+
 cmd_status() {
     echo "neutron status"
     [ -f "$CONFIG" ] && { echo "installed:"; sed 's/^/  /' "$CONFIG"; } || echo "  not installed"
@@ -1019,7 +1106,10 @@ case "${1:-}" in
     remove)           shift; cmd_remove "$@" ;;
     scan)             shift; cmd_scan "$@" ;;
     scan-machine)     shift; classify "$@" ;;
+    update)           shift; cmd_update "$@" ;;
+    autoupdate)       shift; cmd_autoupdate "$@" ;;
+    rollback)         shift; cmd_rollback "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|update [--check]|autoupdate on|off|rollback|uninstall [--purge]}" >&2; exit 2 ;;
 esac
