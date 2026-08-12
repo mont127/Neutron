@@ -1,31 +1,47 @@
 #!/usr/bin/env python3
-# build the app icon and the mark the ui draws, from Logo.png.
+# build the app icon, the mark the ui draws and the readme wordmark, from the
+# purple-on-grey artwork.
 #
-#   make-icon.py [Logo.png] [out-dir]
+#   make-icon.py [Logo.png] [out-dir] [Wordmark.png]
 #
-# the source is a small two-tone bitmap. thresholding it back to two levels after
-# the upscale carves the original 220px grid into a staircase on every curve, so
-# it is left as a smooth resize instead.
+# the artwork is flat purple on flat grey. the grey is keyed out on the green
+# channel (purple has G=0, the grey has G=183) and the edge pixels are
+# un-premultiplied, so antialiased strokes keep their real colour instead of
+# picking up a grey halo.
 
 import sys, os, subprocess
 from PIL import Image, ImageDraw
 
 SRC = sys.argv[1] if len(sys.argv) > 1 else "Logo.png"
 OUT = sys.argv[2] if len(sys.argv) > 2 else "ui/assets"
+WORD = sys.argv[3] if len(sys.argv) > 3 else None
 
-GLYPH = (0, 0, 0)
-TILE_BG = (183, 183, 183)
+BG = (183, 183, 183)
+TILE_BG = BG
 WORK = 4096
 
 
-def mask_from(path):
-    im = Image.open(path).convert("L")
+def keyed(path):
+    im = Image.open(path).convert("RGB")
     w, h = im.size
-    side = max(w, h)
-    square = Image.new("L", (side, side), 255)
-    square.paste(im, ((side - w) // 2, (side - h) // 2))
-    big = square.resize((WORK, WORK), Image.LANCZOS)
-    return big.point(lambda v: max(0, min(255, int((150 - v) * 255 / 60))))
+    out = Image.new("RGBA", (w, h))
+    src, dst = im.load(), out.load()
+    for y in range(h):
+        for x in range(w):
+            r, g, b = src[x, y]
+            a = (BG[1] - g) / BG[1]
+            if a <= 0.004:
+                dst[x, y] = (0, 0, 0, 0)
+                continue
+            if a > 1.0:
+                a = 1.0
+            # undo the blend against the grey so edges are not milky
+            cr = (r - BG[0] * (1 - a)) / a
+            cg = (g - BG[1] * (1 - a)) / a
+            cb = (b - BG[2] * (1 - a)) / a
+            clamp = lambda v: 0 if v < 0 else (255 if v > 255 else int(round(v)))
+            dst[x, y] = (clamp(cr), clamp(cg), clamp(cb), int(round(a * 255)))
+    return out
 
 
 def squircle(side, radius):
@@ -35,21 +51,23 @@ def squircle(side, radius):
     return m.resize((side, side), Image.LANCZOS)
 
 
-def mark(mask, side):
-    img = Image.new("RGBA", (side, side), GLYPH + (0,))
-    img.putalpha(mask.resize((side, side), Image.LANCZOS))
-    return img
+def square(img):
+    w, h = img.size
+    side = max(w, h)
+    out = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    out.paste(img, ((side - w) // 2, (side - h) // 2))
+    return out
 
 
-def icon(mask, side):
+def icon(mark, side):
     # apple insets the art rather than filling the canvas
     tile = int(side * 0.805)
-    art = int(tile * 0.78)
+    art = int(tile * 0.80)
     canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     plate = Image.new("RGBA", (tile, tile), TILE_BG + (255,))
     plate.putalpha(squircle(tile, int(tile * 0.2237)))
     canvas.paste(plate, ((side - tile) // 2, (side - tile) // 2), plate)
-    g = mark(mask, art)
+    g = mark.resize((art, art), Image.LANCZOS)
     canvas.paste(g, ((side - art) // 2, (side - art) // 2), g)
     return canvas
 
@@ -58,20 +76,26 @@ def main():
     if not os.path.exists(SRC):
         sys.exit("no %s" % SRC)
     os.makedirs(OUT, exist_ok=True)
-    m = mask_from(SRC)
 
-    mark(m, 512).save(os.path.join(OUT, "mark.png"))
+    mark = square(keyed(SRC)).resize((WORK, WORK), Image.LANCZOS)
+    mark.resize((512, 512), Image.LANCZOS).save(os.path.join(OUT, "mark.png"))
     print("  mark.png")
 
     iconset = os.path.join(OUT, "Neutron.iconset")
     os.makedirs(iconset, exist_ok=True)
     for pt in (16, 32, 128, 256, 512):
-        icon(m, pt).save(os.path.join(iconset, "icon_%dx%d.png" % (pt, pt)))
-        icon(m, pt * 2).save(os.path.join(iconset, "icon_%dx%d@2x.png" % (pt, pt)))
+        icon(mark, pt).save(os.path.join(iconset, "icon_%dx%d.png" % (pt, pt)))
+        icon(mark, pt * 2).save(os.path.join(iconset, "icon_%dx%d@2x.png" % (pt, pt)))
     icns = os.path.join(OUT, "Neutron.icns")
     subprocess.run(["iconutil", "-c", "icns", iconset, "-o", icns], check=True)
     print("  Neutron.icns (%d KB)" % (os.path.getsize(icns) // 1024))
-    icon(m, 1024).save(os.path.join(OUT, "icon-preview.png"))
+    icon(mark, 1024).save(os.path.join(OUT, "icon-preview.png"))
+
+    if WORD and os.path.exists(WORD):
+        w = keyed(WORD)
+        w = w.resize((w.width * 2, w.height * 2), Image.LANCZOS)
+        w.save(os.path.join(OUT, "wordmark.png"))
+        print("  wordmark.png (%dx%d)" % w.size)
 
 
 main()

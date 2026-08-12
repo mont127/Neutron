@@ -173,26 +173,22 @@ struct Bullet: View {
     }
 }
 
-// drawn as a template so it turns white by itself in dark mode. falls back to
-// a symbol in a checkout with no assets built.
+// the mark is purple artwork, so it is drawn as-is rather than as a template.
+// falls back to a symbol in a checkout with no assets built.
 struct LogoMark: View {
-    var size: CGFloat = 52
+    var size: CGFloat = 56
 
     private var mark: NSImage? {
-        guard let p = Bundle.main.path(forResource: "mark", ofType: "png"),
-              let img = NSImage(contentsOfFile: p) else { return nil }
-        img.isTemplate = true
-        return img
+        guard let p = Bundle.main.path(forResource: "mark", ofType: "png") else { return nil }
+        return NSImage(contentsOfFile: p)
     }
 
     var body: some View {
         if let img = mark {
             Image(nsImage: img)
                 .resizable()
-                .renderingMode(.template)
                 .interpolation(.high)
                 .frame(width: size, height: size)
-                .foregroundStyle(.primary)
         } else {
             Image(systemName: "gamecontroller.fill")
                 .font(.system(size: size * 0.65))
