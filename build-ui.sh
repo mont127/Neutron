@@ -26,6 +26,9 @@ for a in Neutron.icns mark.png; do
 done
 
 cp "$SELF/neutron" "$SELF/neutron-run" "$APP/Contents/Resources/installer/"
+# the version markers: without them a fresh install records version 0 and
+# tries to "update" itself on the first launch
+cp "$SELF/VERSION" "$SELF/ENGINE" "$APP/Contents/Resources/installer/"
 # all of src/ ships: the launch shim, watcher, LaunchAgent plist and js
 rsync -a --exclude='__pycache__' "$SELF/src/" "$APP/Contents/Resources/installer/src/"
 
