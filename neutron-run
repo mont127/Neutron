@@ -53,6 +53,20 @@ export MNC_DYLD="${MNC_DYLD:-/usr/local/lib}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 
+# DXVK renders through Vulkan, which on a mac means MoltenVK - and it must be the
+# x86_64 one, because an x86_64 wine cannot load the system ARM build. without
+# this DXVK throws a C++ exception out of d3d11_dxvk and the game dies.
+for icd in \
+    "$HOME/Library/Application Support/MacNCheese/deps/mnc-vulkan/MoltenVK_icd.json" \
+    "$NEUTRON_HOME/mnc-vulkan/MoltenVK_icd.json" \
+    "/usr/local/share/vulkan/icd.d/MoltenVK_icd.json"; do
+    if [ -f "$icd" ]; then
+        export VK_ICD_FILENAMES="$icd"
+        export VK_DRIVER_FILES="$icd"
+        break
+    fi
+done
+
 # D3DMetal dlopens its framework from next to this dylib, so point at the copy
 # inside the wine's own pack. without it ntdll's d3d fallback returns
 # STATUS_DLL_NOT_FOUND and the game dies before it draws anything.
