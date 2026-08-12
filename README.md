@@ -14,7 +14,7 @@
 The proton mac never had.
 
 > [!WARNING]
-> This project is NOT a replacemnt for crossover.
+> This project is NOT a replacment for crossover.
 
 Neutron runs Windows Steam games on macOS through the native Steam client and a
 custom unified wine, so there is no Windows Steam client in the loop. A game's
