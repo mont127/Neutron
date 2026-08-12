@@ -149,6 +149,25 @@ def assess_macos_build(app):
     common_os = _oslist(common)
     has_mac_flag = "macos" in common_os or "macosx" in common_os
 
+    # steam gates its own Install button on common.oslist. without macos in
+    # there the library page reads "Available for Windows" and Install stays
+    # greyed no matter what else the app carries, and plenty of windows-only
+    # games keep a launch entry and depot from a mac build they dropped years
+    # ago (among us still lists AmongUs.app). those are not something steam will
+    # ever install, so the app needs neutron.
+    if common_os and not has_mac_flag:
+        stale = []
+        if mac_launch:
+            stale.append("%d launch entr%s" % (len(mac_launch),
+                                               "y" if len(mac_launch) == 1 else "ies"))
+        if mac_depots:
+            stale.append("%d depot%s" % (len(mac_depots),
+                                         "" if len(mac_depots) == 1 else "s"))
+        why = "common oslist is %s" % ",".join(common_os)
+        if stale:
+            why += ", the leftover mac %s is not installable" % " and ".join(stale)
+        return "windows-only", [why]
+
     if not (mac_launch or mac_depots or has_mac_flag):
         return "windows-only", ["no macOS launch config, depot or oslist flag"]
 

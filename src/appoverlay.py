@@ -61,6 +61,17 @@ def neutronize(root, appid, shim, force=False):
     real thing). hide the game's own macOS content so only ours is eligible."""
     changed = []
     common = get(root, "common")
+
+    # if steam did not already consider the app macOS-eligible, any mac depot or
+    # launch entry it still carries is from a build that was dropped: steam was
+    # never going to install it (among us still lists AmongUs.app and a mac
+    # depot behind common oslist "windows"). hide it like force does, or steam
+    # picks that dead content over ours. an app that IS mac-eligible is a real
+    # choice and still needs an explicit --force.
+    if not force:
+        was_eligible = "macos" in str(get(common, "oslist") or "") if common is not None else False
+        force = not was_eligible
+
     if common is not None and add_os(common, "oslist"):
         changed.append("common.oslist += macos")
 
