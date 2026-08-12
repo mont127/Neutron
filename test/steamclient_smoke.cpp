@@ -64,8 +64,7 @@ public:
 static const char *k_default_suffix =
     "/Library/Application Support/Steam/Steam.AppBundle/Steam/Contents/MacOS/steamclient.dylib";
 
-// a hung IPC handshake is a real possible failure mode here, so keep every run
-// bounded insted of wedging the harness
+// a hung IPC handshake is a real failure mode here, so bound every run
 static void on_alarm(int)
 {
     const char msg[] = "\nRESULT: TIMEOUT - a steamclient call hung for 45s\n";

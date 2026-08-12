@@ -1,7 +1,6 @@
-// Ask Steam to plan and run a normal install for an appid, with the client
-// briefly told to compute the plan as windows. Steam keeps ownership of the
-// download, the appmanifest, verification and updates - we only nudge the
-// platform while the plan is being built, then put it straight back.
+// ask steam to plan and run a normal install for an appid, with the client
+// briefly told to compute the plan as windows. steam still owns the download,
+// the appmanifest, verification and updates.
 (async () => {
     const APPID = __APPID__;
     const out = [];

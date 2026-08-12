@@ -1,15 +1,13 @@
 #!/bin/bash
-# Zip the unified wine into the runtime bundle the app ships.
+# zip the unified wine into the runtime bundle the app ships.
 #   build-wine-bundle.sh [wine-dir] [out.zip]
 #
-# The tree on disk is a build tree: about half of it is object files, static
-# libs and wine's per-dll test suites, none of which are needed to run a game.
-# Dropping those takes ~5.7 GB down to ~2.3 GB before compression.
+# about half the tree is object files, static libs and wine's per-dll test
+# suites, none of it needed to run a game. dropping those takes 5.7 GB to 2.3 GB.
 #
-# nls/ and fonts/ are symlinks pointing back into the wine source tree. Ship
-# them as links and they dangle on someone else's machine, which shows up as
-# a wineserver l_intl.nls failure and fontless, tiny game windows - so they get
-# copied for real.
+# nls/ and fonts/ are symlinks back into the wine source tree. shipped as links
+# they dangle on another machine: wineserver fails on l_intl.nls and game
+# windows come up tiny and fontless. so they get copied for real.
 set -euo pipefail
 
 SRC="${1:-$HOME/Library/Application Support/MacNCheese/deps/wine-unified}"

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Steam launches this as the game's "macOS build". It finds the windows exe that
-# Steam installed for this appid and hands it to neutron-run.
+# steam launches this as the game's "macOS build". it finds the windows exe
+# steam installed for this appid and hands it to neutron-run.
 #
-# Steam resolves the launch entry relative to the library the game landed in, so
-# a copy of this lives in every steam library's steamapps/common/Neutron Runtime.
+# steam resolves a launch entry relative to the library the game landed in, so a
+# copy lives in every library's steamapps/common/Neutron Runtime.
 #
-# Settings come from Steam's own per-game LAUNCH OPTIONS box (so there is no
-# separate app to open), falling back to the global config:
+# settings come from steam's per-game launch options box, falling back to the
+# global config:
 #     backend=dxmt      d3dmetal | dxmt | dxvk | opengl
 #     msync=0           1 (default) or 0
 #     esync=1
@@ -26,9 +26,8 @@ game_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --appid) appid="${2:-}"; shift 2 ;;
-        # the exact windows binary steam lists for this game, relative to the
-        # install dir. matters for anything shipping several exes (cs2 has the
-        # real game plus the legacy csgo ones)
+        # the exe steam lists for this game, relative to the install dir.
+        # matters for anything shipping several (cs2 also has the legacy csgo ones)
         --exe) want_exe="${2:-}"; shift 2 ;;
         backend=*) export MNC_GAME_BACKEND="${1#backend=}"; shift ;;
         msync=*)   export NEUTRON_MSYNC="${1#msync=}"; shift ;;

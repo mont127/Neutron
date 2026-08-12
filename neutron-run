@@ -5,9 +5,8 @@
 set -euo pipefail
 
 NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
-# the config holds PATHS only. it used to also pin MNC_GAME_BACKEND, which
-# silently overrode the backend you picked on every launch - keep whatever the
-# caller passed in.
+# paths only. pinning MNC_GAME_BACKEND here used to override the backend the
+# caller picked, on every launch.
 _caller_backend="${MNC_GAME_BACKEND:-}"
 [ -f "$NEUTRON_HOME/config" ] && . "$NEUTRON_HOME/config"
 [ -n "$_caller_backend" ] && MNC_GAME_BACKEND="$_caller_backend"
@@ -49,10 +48,8 @@ export MNC_GAME_BACKEND="${MNC_GAME_BACKEND:-d3dmetal}"
 [ "${NEUTRON_ESYNC:-0}" = 1 ] && export WINEESYNC=1
 [ "${NEUTRON_HUD:-0}" = 1 ] && export MTL_HUD_ENABLED=1
 [ "${NEUTRON_DEBUG:-0}" = 1 ] && WINEDEBUG="+loaddll,+module,+seh"
-# the unified wine finds its graphics + media dylibs through this path, and the
-# order matters: mnc-d3d (D3DMetal, libd3dshared) has to come first. with only
-# /usr/local/lib here, DXVK throws and DXMT renders a black screen. this mirrors
-# what macndcheese itself passes.
+# order matters: mnc-d3d (D3DMetal, libd3dshared) first. with only
+# /usr/local/lib here, DXVK throws and DXMT renders a black screen.
 _deps="$(dirname "$wine_dir")"
 if [ -z "${MNC_DYLD:-}" ]; then
     MNC_DYLD="$wine_dir/mnc-d3d"
@@ -83,9 +80,8 @@ export GST_PLUGIN_FEATURE_RANK="${GST_PLUGIN_FEATURE_RANK:-vtdec:NONE,vtdec_hw:N
 export WINEDEBUG="${WINEDEBUG:--all}"
 export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 
-# DXVK renders through Vulkan, which on a mac means MoltenVK - and it must be the
-# x86_64 one, because an x86_64 wine cannot load the system ARM build. without
-# this DXVK throws a C++ exception out of d3d11_dxvk and the game dies.
+# DXVK needs MoltenVK, and the x86_64 build of it: an x86_64 wine cannot load
+# the system ARM one. without this d3d11_dxvk throws a C++ exception.
 for icd in \
     "$HOME/Library/Application Support/MacNCheese/deps/mnc-vulkan/MoltenVK_icd.json" \
     "$NEUTRON_HOME/mnc-vulkan/MoltenVK_icd.json" \
@@ -97,9 +93,8 @@ for icd in \
     fi
 done
 
-# D3DMetal dlopens its framework from next to this dylib, so point at the copy
-# inside the wine's own pack. without it ntdll's d3d fallback returns
-# STATUS_DLL_NOT_FOUND and the game dies before it draws anything.
+# D3DMetal dlopens its framework from next to this dylib. without it ntdll's
+# d3d fallback returns STATUS_DLL_NOT_FOUND.
 for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
     if [ -f "$d/libd3dshared.dylib" ]; then
         export CX_APPLEGPT_LIBD3DSHARED_PATH="$d/libd3dshared.dylib"
@@ -109,20 +104,18 @@ for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
 done
 [ -n "$appid" ] && export SteamAppId="$appid" SteamGameId="$appid"
 
-# Renderer selection is the loader's job: MNC_GAME_BACKEND routes d3d11/dxgi to
+# renderer selection is the loader's job: MNC_GAME_BACKEND routes d3d11/dxgi to
 # that backend's build. Do NOT stage dlls under canonical names and force the
 # variable to d3dmetal - ntdll's D3DMetal fallback then answers d3d11 for every
 # choice, so every backend silently renders as D3DMetal.
 #
-# Measured on this deps pack (test/d3dinfo.exe reports the adapter DXGI hands out):
-#   d3dmetal  works  - "AMD Compatibility Mode", feature level 11_0
-#   opengl    works  - wined3d, feature level 9_3
-#   dxvk      broken - d3d11_dxvk is real DXVK but the pack ships NO DXVK dxgi
-#                      (dxgi_dxvk.dll is wine's wined3d one), so DXVK rejects it:
-#                      "Adapter is not a DXVK adapter"
-#   dxmt      broken - d3d11_dxmt/dxgi_dxmt fail DllMain under those names
-#                      (error 1114) and wine unloads them = black screen
-# Rather than hand the game a renderer that cannot work, say so and use D3DMetal.
+# measured here with test/d3dinfo.exe, which prints the adapter DXGI hands out:
+#   d3dmetal  works    "AMD Compatibility Mode", feature level 11_0
+#   opengl    works    wined3d, feature level 9_3
+#   dxvk      broken   the pack has no DXVK dxgi, only wine's wined3d one, so
+#                      DXVK rejects it: "Adapter is not a DXVK adapter"
+#   dxmt      broken   d3d11_dxmt/dxgi_dxmt fail DllMain under those names (1114)
+# rather than hand the game a renderer that cannot work, say so and use d3dmetal.
 case "${MNC_GAME_BACKEND:-d3dmetal}" in
     dxmt)
         echo "neutron: DXMT cannot load with this wine's dll pack (dxgi_dxmt fails to init) - using D3DMetal" >&2

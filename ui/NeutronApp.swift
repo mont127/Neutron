@@ -1,5 +1,5 @@
-// The Neutron installer. You open it once; after that Neutron lives inside
-// Steam and this app is never needed again.
+// the installer window. you open it once; after that neutron lives inside
+// steam and this app is never needed again.
 
 import SwiftUI
 import AppKit
@@ -78,15 +78,14 @@ final class Installer: ObservableObject {
         if step == .checking { step = isInstalled ? .done : .notInstalled }
     }
 
-    // one button for everything: quit steam if needed, apply, put steam back.
-    // safe to press again after any neutron update.
+    // quit steam if needed, apply, put steam back.
     func install(reopenSteam: Bool = true) {
         step = .working
         log = []
         DispatchQueue.global().async {
             let wasRunning = self.steamRunning
             if wasRunning {
-                self.append("Closing Steam…")
+                self.append("Closing Steam...")
                 self.run("/usr/bin/osascript", ["-e", "tell application \"Steam\" to quit"])
                 for _ in 0..<40 {
                     if self.run("/usr/bin/pgrep", ["-x", "steam_osx"]).isEmpty { break }
@@ -95,11 +94,11 @@ final class Installer: ObservableObject {
             }
             self.stream("/bin/bash", [self.script, "apply"])
             if wasRunning && reopenSteam {
-                self.append("Reopening Steam…")
+                self.append("Reopening Steam...")
                 self.run("/usr/bin/open", ["-a", "Steam"])
             }
             DispatchQueue.main.async {
-                self.step = self.isInstalled ? .done : .failed("Setup did not complete — see the log.")
+                self.step = self.isInstalled ? .done : .failed("Setup did not complete, see the log.")
                 self.refresh()
             }
         }
@@ -112,12 +111,10 @@ final class Installer: ObservableObject {
         }
     }
 
-    // the engine travels with the app as a zip. tell the installer where it is
-    // so the first install can unpack it instead of hunting for a local wine.
+    // the engine travels with the app as a zip. tell the installer where it is.
     private var childEnv: [String: String] {
         var e = ProcessInfo.processInfo.environment
-        // python must not write __pycache__ into our Resources: that breaks the
-        // code signature of the very bundle we are running from
+        // __pycache__ written into our Resources breaks the bundle's signature
         e["PYTHONDONTWRITEBYTECODE"] = "1"
         let res = Bundle.main.bundlePath + "/Contents/Resources"
         let zip = res + "/wine-unified-bundle.zip"
@@ -182,14 +179,41 @@ struct Bullet: View {
     }
 }
 
+// drawn as a template so it turns white by itself in dark mode. falls back to
+// a symbol in a checkout with no assets built.
+struct LogoMark: View {
+    var size: CGFloat = 52
+
+    private var mark: NSImage? {
+        guard let p = Bundle.main.path(forResource: "mark", ofType: "png"),
+              let img = NSImage(contentsOfFile: p) else { return nil }
+        img.isTemplate = true
+        return img
+    }
+
+    var body: some View {
+        if let img = mark {
+            Image(nsImage: img)
+                .resizable()
+                .renderingMode(.template)
+                .interpolation(.high)
+                .frame(width: size, height: size)
+                .foregroundStyle(.primary)
+        } else {
+            Image(systemName: "gamecontroller.fill")
+                .font(.system(size: size * 0.65))
+                .foregroundStyle(.tint)
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var m = Installer()
 
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 6) {
-                Image(systemName: "gamecontroller.fill")
-                    .font(.system(size: 34)).foregroundStyle(.tint)
+                LogoMark()
                 Text("Neutron").font(.system(size: 22, weight: .semibold))
                 Text("Windows games, inside your Steam library")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -204,7 +228,7 @@ struct ContentView: View {
                     Label("Neutron is installed", systemImage: "checkmark.seal.fill")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
                     Bullet(text: "\(m.windowsGames) Windows games can install and play from Steam.")
-                    Bullet(text: "New games are picked up on their own — nothing to run again.")
+                    Bullet(text: "New games are picked up on their own, nothing to run again.")
                     if m.steamRunning {
                         Text("Quit Steam once to finish enabling your games.")
                             .font(.system(size: 12)).foregroundStyle(.orange)
@@ -241,7 +265,7 @@ struct ContentView: View {
                         .font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
                     Bullet(text: "Your Mac games are never touched.")
                     Bullet(text: "Steam does the downloading; Neutron runs the game.")
-                    Bullet(text: "Nothing to open afterwards — this app is only needed once.")
+                    Bullet(text: "Nothing to open afterwards, this app is only needed once.")
                     if m.windowsGames > 0 {
                         Bullet(text: "\(m.windowsGames) Windows games found in your library.")
                     }
@@ -274,7 +298,7 @@ struct ContentView: View {
                 Spacer()
                 if m.step == .working {
                     ProgressView().controlSize(.small)
-                    Text("Working…").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("Working...").font(.system(size: 12)).foregroundStyle(.secondary)
                 } else if m.step == .done {
                     Button("Re-apply") { m.install() }.controlSize(.large)
                     Button("Open Steam") {

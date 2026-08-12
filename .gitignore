@@ -4,3 +4,8 @@
 Neutron Installer.app/
 __pycache__/
 dist/
+ui/assets/Neutron.iconset/
+.DS_Store
+d3dinfo.dxvk-cache
+*.dxvk-cache
+ui/assets/icon-preview.png

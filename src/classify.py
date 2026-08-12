@@ -2,8 +2,8 @@
 # classify the games in your steam library: native mac, windows-only, or worth a
 # look. prefer macos always; neutron only handles windows-only.
 #
-# the library is everything steam has cached art for, not just what is installed
-# - an installer ui has to be able to show you a game you have NOT installed yet.
+# the library is everything steam has cached art for, not just what is
+# installed: the ui has to show games you have not installed yet.
 #
 #   classify.py <steam_dir> [appid ...]
 # prints:  appid|verdict|action|installed|name

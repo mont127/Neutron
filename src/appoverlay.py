@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# make one windows-only app look macOS-eligible to the local steam client, by
-# editing only its entry in the appinfo cache. nothing on valve's side changes
-# and no other app is touched.
+# make one windows-only app look macOS-eligible to the local steam client by
+# editing its entry in the appinfo cache. no other app is touched.
 #
 #   appoverlay.py show   <appinfo.vdf> <appid>
 #   appoverlay.py enable <appinfo.vdf> <appid> [launch-exe-relative-path]
@@ -92,11 +91,10 @@ def neutronize(root, appid, shim, force=False):
     else:
         launches = config[i][2]
 
-    # a launch entry with no oslist matches every platform, so on a mac steam
-    # would offer BOTH the raw .exe and ours and ask the user which to run. pin
-    # the game's own entries to windows so only ours shows up here. in force
-    # mode also strip macos from the game's own mac entries, otherwise steam
-    # keeps offering (and preferring) its legacy mac build.
+    # an entry with no oslist matches every platform, so steam would offer both
+    # the raw .exe and ours and ask which to run. pin the game's own entries to
+    # windows. in force mode also strip macos from its mac entries, or steam
+    # keeps preferring the legacy mac build.
     win_exe = None
     for t, key, entry in launches:
         if t != MAP or key == LAUNCH_KEY:
@@ -160,9 +158,8 @@ def main(argv):
         describe(root)
         return 0
 
-    # "is this app fully up to date with the current overlay?" - exit 0 if yes.
-    # checks more than mere presence, so an overlay written by an older neutron
-    # gets refreshed instead of being left half-done.
+    # exit 0 if the app is up to date with the current overlay. more than mere
+    # presence, so an overlay from an older neutron gets refreshed.
     if action == "check":
         config = get(root, "config") or []
         launches = get(config, "launch") or []

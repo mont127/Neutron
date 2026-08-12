@@ -1,10 +1,8 @@
 #!/bin/bash
-# build Neutron.app - the window you use to install windows games. steam still
-# owns Play; this owns everything before it.
+# build Neutron.app, the window you install from.
 #   build-ui.sh [output-dir] [wine-bundle.zip]
-# with a zip the app is self-contained: it unpacks the engine on first install
-# and can be deleted afterwards. without one the app expects a wine already on
-# the machine (a macndcheese install, or a dev tree).
+# with a zip the app is self-contained and unpacks the engine on first install.
+# without one it expects a wine already on the machine.
 set -euo pipefail
 
 SELF="$(cd "$(dirname "$0")" && pwd)"
@@ -19,9 +17,16 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/installer/src"
 
 swiftc -O -parse-as-library -o "$APP/Contents/MacOS/Neutron" "$SELF/ui/NeutronApp.swift"
 
+# icon + the mark the window draws. regenerate from Logo.png if they are stale
+if [ -f "$SELF/Logo.png" ] && [ ! -f "$SELF/ui/assets/Neutron.icns" ]; then
+    python3 "$SELF/make-icon.py" "$SELF/Logo.png" "$SELF/ui/assets" >/dev/null
+fi
+for a in Neutron.icns mark.png; do
+    [ -f "$SELF/ui/assets/$a" ] && cp "$SELF/ui/assets/$a" "$APP/Contents/Resources/$a"
+done
+
 cp "$SELF/neutron" "$SELF/neutron-run" "$APP/Contents/Resources/installer/"
-# everything under src/ ships: the launch shim, the watcher, the LaunchAgent
-# plist and the js all get installed from there at some point
+# all of src/ ships: the launch shim, watcher, LaunchAgent plist and js
 rsync -a --exclude='__pycache__' "$SELF/src/" "$APP/Contents/Resources/installer/src/"
 chmod +x "$APP/Contents/Resources/installer/neutron" \
          "$APP/Contents/Resources/installer/neutron-run" \
@@ -61,6 +66,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Neutron</string>
+    <key>CFBundleIconFile</key><string>Neutron</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
@@ -68,8 +74,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 echo "</plist>" >> "$APP/Contents/Info.plist"
 
-# sign last, after every resource is in place - anything written into the
-# bundle afterwards invalidates the seal
+# sign last: anything written into the bundle afterwards invalidates the seal
 find "$APP" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 codesign --force --deep --sign - "$APP" 2>/dev/null || echo "  (unsigned, fine for local use)"
 codesign --verify --deep "$APP" 2>&1 && echo "  signature ok"

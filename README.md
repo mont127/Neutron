@@ -18,7 +18,7 @@ inside a `.app` bundle and is not part of this source tree.
 ## the policy: macOS first, Neutron for the rest
 
 macOS Steam already downloads and runs a game's macOS build whenever it has one,
-so Neutron never touches those — it leaves them to Steam. It only handles
+so Neutron never touches those and leaves them to Steam. It only handles
 Windows-only titles. It never forces Steam's platform to Windows globally, which
 would drag native Mac games onto their Windows depots.
 
@@ -45,37 +45,33 @@ From a checkout (you supply your own wine build):
 
 ## getting a game
 
-`neutron get <appid>` does one thing, the right way for the game:
+After `apply`, a Windows-only game shows its own Install button in Steam and
+downloads through Steam like anything else. Neutron does this by adding a macOS
+launch entry to that app's entry in Steam's local `appinfo.vdf`, pointing at a
+shim; Steam then treats the game as playable on this machine and handles the
+download, the appmanifest and updates itself.
 
-- if the app has a macOS build, it tells Steam to install the native version and
-  stops. macOS is always preferred.
-- if it is Windows-only, it tells Steam to download the Windows version, then
-  wires it to a Play button that runs through Neutron.
+    ./neutron apply             # quit Steam first. enables every windows-only game
+    ./neutron enable-game <id>  # one game
+    ./neutron force <id>        # a game whose mac build you do not want (cs2)
 
-The Windows path needs Steam's platform pointed at Windows while it downloads.
-That setting is global, so before flipping it `get` pauses auto-updates on every
-other installed game (and restores them after) — otherwise Steam would pull their
-Windows depots too. It runs in two steps, both with Steam quit:
+The overlay does not survive Steam refreshing an app's metadata, so `install`
+also sets up a watcher that puts it back. `sync` does the same by hand.
 
-    ./neutron get <appid>       # quit Steam; starts the windows download
-    # confirm the install in Steam, let it finish, quit Steam again
-    ./neutron get <appid>       # finishes: restores everything, wires the shortcut
+For a Windows game already on disk, or one outside your library:
 
-Then restart Steam and launch "`<name> (Neutron)`" from your library. The wire
-step finds the exe, drops a `steam_appid.txt` next to it so the game reports to
-the right app, and writes a non-Steam shortcut that runs it through `neutron-run`.
+    ./neutron add <appid>
+    ./neutron add-exe "<name>" /path/to/game.exe [appid]
 
-For a Windows game whose files are already on disk, skip the download:
+`get <appid>` is the older manual route: it drives `download_depot` on the Steam
+console, which ignores the client platform.
 
-    ./neutron add <appid>                       # it is in your Steam library
-    ./neutron add-exe "<name>" /path/to/game.exe [appid]   # anywhere else
-
-All of these edit Steam config, so quit Steam first; originals are backed up
+All of these edit Steam config, so quit Steam first. Originals are backed up
 under `~/Library/Application Support/Neutron/steam-backup`.
 
 ## building the .app
 
-Three steps, because the engine is packed once and reused:
+The engine is packed once and reused:
 
     ./build-wine-bundle.sh /path/to/unified-wine dist/wine-unified-bundle.zip
     ./build-ui.sh dist dist/wine-unified-bundle.zip
@@ -98,15 +94,23 @@ which is why the installer sets `PYTHONDONTWRITEBYTECODE`.
 
 ## layout
 
-    neutron            the installer
-    neutron-run        the launch shim Steam calls per game
-    build-app.sh       wraps the installer + a private wine into a .app
-    src/steam_stub.c   the stub steam.exe
-    src/appinfo.py     reads appinfo.vdf: native-mac vs windows-only
-    src/classify.py    per-app verdict + action over the installed library
-    src/gameexe.py     resolves an installed app to its windows exe
-    src/shortcuts.py   adds/removes non-steam shortcuts in shortcuts.vdf
-    test/              standalone bringup checks (dev)
+    neutron               the installer
+    neutron-run           the launch shim, runs a windows exe under wine
+    ui/NeutronApp.swift   the installer window
+    build-wine-bundle.sh  packs the engine into a zip
+    build-ui.sh           builds Neutron.app around it
+    build-dmg.sh          wraps that into a disk image
+    make-icon.py          Logo.png -> app icon + the mark the ui draws
+    src/neutron-launch    what Steam runs as the game's "macOS build"
+    src/appinfo_write.py  binary appinfo.vdf rewriter
+    src/appoverlay.py     the per-app overlay written through it
+    src/adopt.py          makes Steam treat a downloaded game as a real install
+    src/steam_stub.c      the stub steam.exe
+    src/appinfo.py        reads appinfo.vdf: native-mac vs windows-only
+    src/classify.py       per-app verdict + action over the library
+    src/gameexe.py        resolves an installed app to its windows exe
+    src/shortcuts.py      adds/removes non-steam shortcuts in shortcuts.vdf
+    test/                 standalone bringup checks (dev)
 
 ## the bridge
 

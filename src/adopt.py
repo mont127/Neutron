@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
-# make steam treat an already-downloaded windows game as a real, installed game
-# of its own - so its own library page stops showing a dead greyed Install and
-# shows a working Play instead.
+# make steam treat an already-downloaded windows game as a real install, so its
+# library page shows Play instead of a greyed Install.
 #
 # two pieces:
 #   1. an appmanifest_<appid>.acf steam accepts, pointing at steamapps/common/<dir>
-#   2. the launch target named in the app's launch entry is replaced by a small
-#      shell script (macOS runs any executable file with a shebang, whatever its
-#      extension is), which hands the real .exe to neutron-run.
-#
-# nothing is patched and no code is injected: steam just launches the file it
-# was always going to launch.
+#   2. the app's launch target replaced by a shell script, which macOS will run
+#      whatever its extension, and which hands the real .exe to neutron-run.
 #
 #   adopt.py plan   <steam_dir> <appid>
 #   adopt.py apply  <steam_dir> <appid> <game_dir> <neutron_run>
@@ -23,7 +18,7 @@ import sys
 import appinfo
 
 SHIM = """#!/bin/bash
-# Neutron launcher. Steam runs this; it hands the real windows exe to wine.
+# neutron launcher. steam runs this, it hands the windows exe to wine.
 exec {run} {exe} "$@"
 """
 

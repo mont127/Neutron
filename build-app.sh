@@ -19,7 +19,6 @@ RES="$APP/Contents/Resources"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$RES/installer/src" "$RES/installer/prebuilt" "$RES/wine-unified"
 
-# installer sources
 cp "$SELF/neutron" "$SELF/neutron-run" "$RES/installer/"
 cp "$SELF/src/steam_stub.c" "$SELF/src/appinfo.py" "$SELF/src/vdf_launchopt.py" "$RES/installer/src/"
 chmod +x "$RES/installer/neutron" "$RES/installer/neutron-run"
@@ -35,7 +34,6 @@ else
     rmdir "$RES/installer/prebuilt" 2>/dev/null || true
 fi
 
-# the private wine
 echo "copying wine (this is the big part)..."
 rsync -a "$WINE_SRC/" "$RES/wine-unified/"
 
