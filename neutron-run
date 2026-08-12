@@ -4,12 +4,20 @@
 # client through the lsteamclient bridge. no windows steam.
 set -euo pipefail
 
-NEUTRON_HOME="$HOME/Library/Application Support/Neutron"
+NEUTRON_HOME="${NEUTRON_HOME:-$HOME/Library/Application Support/Neutron}"
 # paths only. pinning MNC_GAME_BACKEND here used to override the backend the
 # caller picked, on every launch.
+# config is sourced, so it clobbers anything the caller exported. Save the
+# caller's values first and put them back afterwards -- otherwise pointing a
+# test run at a throwaway prefix with NEUTRON_PREFIX=... silently runs against
+# the real one instead.
 _caller_backend="${MNC_GAME_BACKEND:-}"
+_caller_prefix="${NEUTRON_PREFIX:-}"
+_caller_wine="${NEUTRON_WINE:-}"
 [ -f "$NEUTRON_HOME/config" ] && . "$NEUTRON_HOME/config"
 [ -n "$_caller_backend" ] && MNC_GAME_BACKEND="$_caller_backend"
+[ -n "$_caller_prefix" ] && NEUTRON_PREFIX="$_caller_prefix"
+[ -n "$_caller_wine" ] && NEUTRON_WINE="$_caller_wine"
 # running neutron-run directly (not via steam) should still honour the settings
 if [ -z "${MNC_GAME_BACKEND:-}" ] && [ -f "$NEUTRON_HOME/defaults" ]; then
     . "$NEUTRON_HOME/defaults"
@@ -62,6 +70,22 @@ if [ -z "${MNC_DYLD:-}" ]; then
         MNC_DYLD="$MNC_DYLD:$d"
     done
 fi
+
+# DXMT's PEs import winemetal.dll, whose unix half dlls/winemetal/winemetal.so
+# links @rpath/winemac.so - but its only LC_RPATHs are @loader_path/ and
+# @loader_path/../../, and winemac.so lives in the sibling dlls/winemac.drv/
+# (build-tree layout). dyld cannot resolve it, winemetal's DllMain returns
+# FALSE, and STATUS_DLL_INIT_FAILED cascades to d3d11_dxmt/dxgi_dxmt as gle
+# 1114 - a black screen, not an error. It only "works" elsewhere by accident:
+# if anything already mapped winemac.so, dyld matches it by install name.
+# One additive path fixes it deterministically. A flat-layout wine has no such
+# directory and is unaffected.
+if [ -d "$wine_dir/dlls/winemac.drv" ]; then
+    case ":$MNC_DYLD:" in
+        *":$wine_dir/dlls/winemac.drv:"*) ;;
+        *) MNC_DYLD="$wine_dir/dlls/winemac.drv:$MNC_DYLD" ;;
+    esac
+fi
 export MNC_DYLD
 
 # the rest of what macndcheese passes a game. without these the same game that
@@ -82,16 +106,55 @@ export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 
 # DXVK needs MoltenVK, and the x86_64 build of it: an x86_64 wine cannot load
 # the system ARM one. without this d3d11_dxvk throws a C++ exception.
-for icd in \
-    "$HOME/Library/Application Support/MacNCheese/deps/mnc-vulkan/MoltenVK_icd.json" \
-    "$NEUTRON_HOME/mnc-vulkan/MoltenVK_icd.json" \
-    "/usr/local/share/vulkan/icd.d/MoltenVK_icd.json"; do
-    if [ -f "$icd" ]; then
-        export VK_ICD_FILENAMES="$icd"
-        export VK_DRIVER_FILES="$icd"
-        break
+#
+# We must NOT point at MNC's shipped deps/mnc-vulkan/MoltenVK_icd.json. That
+# manifest sets "is_portability_driver": true, and DXVK 1.10.3 never sets
+# VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR nor enables
+# VK_KHR_portability_enumeration, so the Vulkan loader rejects the only driver
+# on the box:
+#   vkCreateInstance: Found drivers that contain devices which support the
+#   portability subset, but the instance does not enumerate portability drivers!
+#   vkCreateInstance: Found no drivers!
+# and DXVK dies with "DxvkInstance::createInstance: Failed to create Vulkan 1.1
+# instance". MacNdCheese itself never uses that file either; its backend
+# synthesizes an ICD with no portability key, which is why DXVK works there.
+#
+# So we synthesize our own manifest: absolute library_path (the shipped one is
+# the relative "./libMoltenVK.dylib", so a plain copy would not resolve) and no
+# is_portability_driver key.
+#
+# The staged prefix dxgi_dxvk.dll must be the real DXVK one (neutron's stage_d3d
+# overlays vendor/dxvk-1.10.3). If it is still the pack's wined3d dxgi, DXVK
+# only reports a fake "NVIDIA GeForce 6800" identity, so say so rather than
+# pretend. That is a warning, not a downgrade: rendering is still DXVK.
+# NB: written with a command substitution, not "strings | grep -q". Under
+# `set -o pipefail` grep -q exits early, strings dies of SIGPIPE, and the
+# pipeline returns 141 -- so the check reports "not DXVK" for a file that is.
+if [ "$MNC_GAME_BACKEND" = "dxvk" ]; then
+    _dxgi="$prefix/drive_c/windows/system32/dxgi_dxvk.dll"
+    if [ ! -f "$_dxgi" ] || [ "$(strings -a "$_dxgi" 2>/dev/null | grep -ci dxvk || true)" = 0 ]; then
+        echo "neutron: prefix has the pack's wined3d dxgi, not DXVK's - adapter identity will be wrong; re-run 'neutron install' to stage it" >&2
     fi
-done
+    unset _dxgi
+fi
+
+if [ "$MNC_GAME_BACKEND" = "dxvk" ]; then
+    for _mvk in \
+        "$HOME/Library/Application Support/MacNCheese/deps/mnc-vulkan/libMoltenVK.dylib" \
+        "$NEUTRON_HOME/mnc-vulkan/libMoltenVK.dylib" \
+        "/usr/local/lib/libMoltenVK.dylib"; do
+        [ -f "$_mvk" ] || continue
+        _icd_dir="$NEUTRON_HOME/vulkan"
+        _icd="$_icd_dir/MoltenVK_icd.json"
+        mkdir -p "$_icd_dir"
+        printf '{\n  "file_format_version": "1.0.0",\n  "ICD": {\n    "library_path": "%s",\n    "api_version": "1.2.0"\n  }\n}\n' \
+            "$_mvk" > "$_icd"
+        export VK_ICD_FILENAMES="$_icd"
+        export VK_DRIVER_FILES="$_icd"
+        break
+    done
+    unset _mvk _icd _icd_dir
+fi
 
 # D3DMetal dlopens its framework from next to this dylib. without it ntdll's
 # d3d fallback returns STATUS_DLL_NOT_FOUND.
@@ -104,30 +167,22 @@ for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do
 done
 [ -n "$appid" ] && export SteamAppId="$appid" SteamGameId="$appid"
 
-# renderer selection is the loader's job: MNC_GAME_BACKEND routes d3d11/dxgi to
-# that backend's build. Do NOT stage dlls under canonical names and force the
-# variable to d3dmetal - ntdll's D3DMetal fallback then answers d3d11 for every
-# choice, so every backend silently renders as D3DMetal.
+# renderer selection is the loader's job. steam_dxmt_redirect, inlined into the
+# PE-side ntdll, rewrites the filename before any file is opened, picking a
+# column per MNC_GAME_BACKEND. so stage the pack under its own basenames and
+# leave the choice to the variable. the [D3DMETAL_FB] path in the unix ntdll
+# does not intercept LoadLibrary and cannot override a staged PE.
 #
 # measured here with test/d3dinfo.exe, which prints the adapter DXGI hands out:
 #   d3dmetal  works    "AMD Compatibility Mode", feature level 11_0
 #   opengl    works    wined3d, feature level 9_3
-#   dxvk      broken   the pack has no DXVK dxgi, only wine's wined3d one, so
-#                      DXVK rejects it: "Adapter is not a DXVK adapter"
-#   dxmt      broken   d3d11_dxmt/dxgi_dxmt fail DllMain under those names (1114)
-# rather than hand the game a renderer that cannot work, say so and use d3dmetal.
-case "${MNC_GAME_BACKEND:-d3dmetal}" in
-    dxmt)
-        echo "neutron: DXMT cannot load with this wine's dll pack (dxgi_dxmt fails to init) - using D3DMetal" >&2
-        export MNC_GAME_BACKEND=d3dmetal
-        ;;
-    dxvk)
-        if ! strings -a "$wine_dir/mnc-d3d/dxgi_dxvk.dll" 2>/dev/null | grep -qi dxvk; then
-            echo "neutron: DXVK is incomplete here (no DXVK dxgi in mnc-d3d) - using D3DMetal" >&2
-            export MNC_GAME_BACKEND=d3dmetal
-        fi
-        ;;
-esac
+#   dxvk      works    "Apple M2 Max" (vendor 0x106b), feature level 11_0, once
+#                      the real DXVK dxgi is staged over the pack's wined3d one
+#                      and the ICD has no is_portability_driver key - see above.
+#   dxmt      works    "Apple M2 Max" (vendor 0x106b), feature level 11_0, once
+#                      dlls/winemac.drv is on MNC_DYLD - see the note above. The
+#                      old "renamed dlls fail DllMain by name" theory was wrong:
+#                      d3d11_d3dm.dll also exports "d3d11.dll" and loads fine.
 
 # arch strips DYLD_*, so carry it in MNC_DYLD and re-export past the boundary
 run() {

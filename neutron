@@ -145,6 +145,18 @@ stage_d3d() {
         cp "$f" "$sys32/$(basename "$f")" && n=$((n + 1))
     done
     note "staged $n graphics dlls from $(basename "$pack")"
+
+    # the pack's dxgi_dxvk.dll is not DXVK at all -- it is wine's wined3d dxgi
+    # (0 dxvk strings, 2672 wined3d strings, imports wined3d.dll). DXVK's d3d11
+    # then warns "Adapter is not a DXVK adapter" and reports a fake
+    # "NVIDIA GeForce 6800" identity that games use to pick presets and VRAM
+    # budgets. Overlay the real DXVK 1.10.3 dxgi from the same build session
+    # that produced the pack's d3d11_dxvk.dll (md5-identical), into the PREFIX
+    # only -- never into the read-only mnc-d3d pack.
+    if [ -f "$SELF_DIR/vendor/dxvk-1.10.3/x86_64/dxgi.dll" ]; then
+        cp "$SELF_DIR/vendor/dxvk-1.10.3/x86_64/dxgi.dll" "$sys32/dxgi_dxvk.dll" \
+            && note "staged real DXVK dxgi over the pack's wined3d one"
+    fi
 }
 
 # --- steam play compatibility tool -------------------------------------------
