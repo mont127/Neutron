@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 # make steam treat an already-downloaded windows game as a real install, so its
-# library page shows Play instead of a greyed Install.
-#
-# two pieces:
-#   1. an appmanifest_<appid>.acf steam accepts, pointing at steamapps/common/<dir>
-#   2. the app's launch target replaced by a shell script, which macOS will run
-#      whatever its extension, and which hands the real .exe to neutron-run.
+# library page shows Play instead of a greyed Install: an appmanifest steam
+# accepts, plus a launch target replaced by a shell script that hands the .exe
+# to neutron-run.
 #
 #   adopt.py plan   <steam_dir> <appid>
 #   adopt.py apply  <steam_dir> <appid> <game_dir> <neutron_run>

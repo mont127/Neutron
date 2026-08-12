@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-# talk to the steam client's own javascript context over its CEF debugging port.
-# steam must be started with -cef-enable-debugging.
-#
-# this is how we reach SteamClient.* without patching anything: the client
-# exposes the same api its own ui uses, including Console.ExecCommand, which is
-# the only way found so far to actually set @sSteamCmdForcePlatformType.
+# talk to the steam client's javascript context over its CEF debugging port,
+# which needs steam started with -cef-enable-debugging. reaches SteamClient.*
+# without patching, including Console.ExecCommand.
 #
 #   steamjs.py targets
 #   steamjs.py eval "<javascript>"          (runs in SharedJSContext)

@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 # surgical rewriter for steam's binary appinfo.vdf.
 #
-# every app we are not touching keeps its original bytes, so the blast radius is
-# one entry. for v29 the key names are indexes into a string table at the end of
-# the file; we only ever APPEND to that table, which keeps every existing index
-# valid and means untouched entries stay byte-identical.
-#
-# appinfo.vdf is a cache. if it ever goes wrong, delete it and steam rebuilds it.
+# untouched apps keep their original bytes. for v29 the key names index a string
+# table at the end of the file, and we only append to it, so existing indexes
+# stay valid. appinfo.vdf is a cache: delete it and steam rebuilds it.
 
 import hashlib
 import io

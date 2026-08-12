@@ -3,7 +3,7 @@
 # look. prefer macos always; neutron only handles windows-only.
 #
 # the library is everything steam has cached art for, not just what is
-# installed: the ui has to show games you have not installed yet.
+# installed.
 #
 #   classify.py <steam_dir> [appid ...]
 # prints:  appid|verdict|action|installed|name

@@ -1,12 +1,9 @@
 #!/bin/bash
-# steam launches this as the game's "macOS build". it finds the windows exe
-# steam installed for this appid and hands it to neutron-run.
+# steam launches this as the game's "macOS build": it finds the windows exe and
+# hands it to neutron-run. a copy lives in every library, because steam resolves
+# a launch entry relative to the one the game landed in.
 #
-# steam resolves a launch entry relative to the library the game landed in, so a
-# copy lives in every library's steamapps/common/Neutron Runtime.
-#
-# settings come from steam's per-game launch options box, falling back to the
-# global config:
+# settings come from steam's per-game launch options, else the global config:
 #     backend=dxmt      d3dmetal | dxmt | dxvk | opengl
 #     msync=0           1 (default) or 0
 #     esync=1
