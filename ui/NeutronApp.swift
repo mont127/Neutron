@@ -215,8 +215,6 @@ struct ContentView: View {
             VStack(spacing: 6) {
                 LogoMark()
                 Text("Neutron").font(.system(size: 22, weight: .semibold))
-                Text("Windows games, inside your Steam library")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity).padding(.top, 26).padding(.bottom, 18)
 
@@ -227,8 +225,6 @@ struct ContentView: View {
                 case .done:
                     Label("Neutron is installed", systemImage: "checkmark.seal.fill")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(.green)
-                    Bullet(text: "\(m.windowsGames) Windows games can install and play from Steam.")
-                    Bullet(text: "New games are picked up on their own, nothing to run again.")
                     if m.steamRunning {
                         Text("Quit Steam once to finish enabling your games.")
                             .font(.system(size: 12)).foregroundStyle(.orange)
