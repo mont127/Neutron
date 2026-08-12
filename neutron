@@ -604,6 +604,42 @@ cmd_autosync() {
     esac
 }
 
+
+# put Neutron itself in your steam library, so its settings are one click away
+# from inside steam. no injection, no debug port - just a normal shortcut.
+cmd_menu() {
+    case "${1:-on}" in
+        on)
+            steam_running && die "quit steam first, then run: neutron menu on"
+            local app cfg wrote=0
+            for app in "$SELF_DIR/dist/Neutron.app" "/Applications/Neutron.app" \
+                       "$NEUTRON_HOME/Neutron.app"; do
+                [ -d "$app" ] && break
+            done
+            [ -d "$app" ] || die "Neutron.app not found (build it with ./build-ui.sh)"
+            while IFS= read -r cfg; do
+                [ -n "$cfg" ] || continue
+                python3 "$SELF_DIR/src/shortcuts.py" add "$cfg/shortcuts.vdf" \
+                    "Neutron Settings" "\"/usr/bin/open\"" "$(dirname "$app")" \
+                    "-a \"$app\"" && wrote=1
+            done < <(configdirs)
+            [ "$wrote" = 1 ] || die "no steam user config dir found"
+            echo "added \"Neutron Settings\" to your steam library."
+            echo "restart steam; it sits with your games and opens the settings window."
+            ;;
+        off)
+            steam_running && die "quit steam first"
+            local cfg
+            while IFS= read -r cfg; do
+                [ -n "$cfg" ] || continue
+                python3 "$SELF_DIR/src/shortcuts.py" remove "$cfg/shortcuts.vdf" "Neutron Settings" || true
+            done < <(configdirs)
+            echo "removed it from your library."
+            ;;
+        *) die "usage: neutron menu [on|off]" ;;
+    esac
+}
+
 cmd_scan() {
     echo "installed games (macOS preferred, neutron handles windows-only):"
     classify | while IFS='|' read -r id verdict action inst name; do
@@ -898,6 +934,7 @@ case "${1:-}" in
     enable-all)       shift; cmd_enable_all "$@" ;;
     sync)             shift; cmd_sync "$@" ;;
     autosync)         shift; cmd_autosync "$@" ;;
+    menu)             shift; cmd_menu "$@" ;;
     set)              shift; cmd_set "$@" ;;
     adopt)            shift; cmd_adopt "$@" ;;
     unadopt)          shift; cmd_unadopt "$@" ;;
@@ -911,5 +948,5 @@ case "${1:-}" in
     scan-machine)     shift; classify "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|uninstall [--purge]}" >&2; exit 2 ;;
 esac
