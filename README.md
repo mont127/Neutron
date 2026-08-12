@@ -28,8 +28,9 @@ from Proton that loads the x86_64 slice of `steamclient.dylib`; a small stub
 `steam.exe` provides the running process the api checks for; Steam's Play button
 runs a shim that launches the game under wine.
 
-This repo is the installer only. The unified wine engine is shipped separately
-inside a `.app` bundle and is not part of this source tree.
+This repo is the installer. The unified wine engine is shipped separately inside
+a `.app` bundle and is not part of this source tree. The one binary here is
+`vendor/dxvk-1.10.3/x86_64/dxgi.dll`, which the DXVK backend needs.
 
 ## the policy: macOS first, Neutron for the rest
 
@@ -100,9 +101,6 @@ game) and copies `nls/` and `fonts/` for real rather than shipping the symlinks,
 which would dangle on someone else's machine. The zip lands in the app's
 Resources; the installer unpacks it on first run. Nothing here is committed to
 this repo.
-
-`build-app.sh` is the older variant that copies an unpacked wine into the
-bundle instead of a zip; it still works but produces a much larger app.
 
 The steam stub is prebuilt into the app so the target machine needs no compiler.
 Sign last: anything written into the bundle after `codesign` breaks its seal,
