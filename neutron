@@ -255,9 +255,13 @@ stage_bridge() {
     # path it expects instead of an unknown lsteamclient.dll in system32
     local sdir="$prefix/drive_c/Program Files (x86)/Steam"
     mkdir -p "$sdir"
+    # steamclient.dll is the 64-bit bridge here, not the 32-bit one. steam_api64
+    # loads whatever the registry names and then looks the module back up as
+    # "steamclient.dll" to reach Steam_ReleaseThreadLocalMemory; under any other
+    # name that returns NULL and a steam DRM game dies with
+    # "Application load error 3:0000065432". neutron is 64-bit only regardless.
+    cp "$src/x86_64-windows/lsteamclient.dll" "$sdir/steamclient.dll"
     cp "$src/x86_64-windows/lsteamclient.dll" "$sdir/steamclient64.dll"
-    [ -f "$src/i386-windows/lsteamclient.dll" ] && \
-        cp "$src/i386-windows/lsteamclient.dll" "$sdir/steamclient.dll"
     [ -f "$BIN/steam.exe" ] && cp "$BIN/steam.exe" "$sdir/steam.exe"
 
     # an unguarded cp into a system32 that wineboot never created aborted the
