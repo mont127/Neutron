@@ -16,6 +16,7 @@ final class Installer: ObservableObject {
     @Published var version = ""
     @Published var updateTo = ""      // non-empty when a newer release exists
     @Published var d3dmetalReady = false
+    @Published var d3dmetalDismissed = false
     @Published var steamRunning = false
 
     let home = NSHomeDirectory()
@@ -79,6 +80,8 @@ final class Installer: ObservableObject {
         updateTo = (latest.isEmpty || latest == version) ? "" : latest
         d3dmetalReady = FileManager.default.fileExists(
             atPath: neutronHome + "/wine-unified/mnc-d3d/libd3dshared.dylib")
+        d3dmetalDismissed = FileManager.default.fileExists(
+            atPath: neutronHome + "/.no-d3dmetal")
         loadDefaults()
         if step == .checking { step = isInstalled ? .done : .notInstalled }
     }
@@ -133,6 +136,15 @@ final class Installer: ObservableObject {
             self.stream("/bin/bash", [self.script, "d3dmetal", url.path])
             DispatchQueue.main.async { self.step = .done; self.refresh() }
         }
+    }
+
+    // dxvk and dxmt need no toolkit, so let people carry on without it and stop
+    // being asked. picking d3dmetal later still warns at launch.
+    func skipToolkit() {
+        try? "".write(toFile: neutronHome + "/.no-d3dmetal",
+                      atomically: true, encoding: .utf8)
+        if backend == "d3dmetal" { backend = "dxvk"; saveDefaults() }
+        d3dmetalDismissed = true
     }
 
     // only the scripts update; the engine is left alone
@@ -271,7 +283,7 @@ struct ContentView: View {
                         }
                     }
 
-                    if !m.d3dmetalReady {
+                    if !m.d3dmetalReady && !m.d3dmetalDismissed {
                         HStack(alignment: .top, spacing: 8) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange).font(.system(size: 12))
@@ -281,8 +293,12 @@ struct ContentView: View {
                                 Text("It is Apple's and cannot be bundled. Download the Game Porting Toolkit and point Neutron at it. DXVK and DXMT work without it.")
                                     .font(.system(size: 11)).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
-                                Button("Choose toolkit .dmg...") { m.chooseToolkit() }
-                                    .controlSize(.small)
+                                HStack(spacing: 8) {
+                                    Button("Choose toolkit .dmg...") { m.chooseToolkit() }
+                                        .controlSize(.small)
+                                    Button("Continue without D3DMetal") { m.skipToolkit() }
+                                        .controlSize(.small)
+                                }
                             }
                         }
                         Divider().padding(.vertical, 4)

@@ -246,6 +246,51 @@ cmd_d3dmetal() {
     note "d3dmetal ready"
 }
 
+# --- fonts --------------------------------------------------------------------
+# a fresh prefix has an empty Fonts dir, so wine falls back to its own free
+# fonts and anything asking for arial/tahoma/times draws tofu boxes or nothing.
+# macOS already ships the microsoft core fonts in Supplemental, so copy the
+# user's own copies in rather than redistributing them. wine registers any ttf
+# dropped in that directory on next start. idempotent, and a no-op if a prefix
+# already has them.
+
+install_fonts() {
+    # one `local` expands every argument before assigning any, so fonts cannot
+    # be built from prefix on the same line
+    local prefix="$1" n=0 f fonts
+    fonts="$prefix/drive_c/windows/Fonts"
+    mkdir -p "$fonts"
+    if [ -f "$fonts/Arial.ttf" ] || [ -f "$fonts/arial.ttf" ]; then return 0; fi
+
+    local fam=(Arial "Arial Black" "Arial Narrow" "Times New Roman" "Courier New"
+               Georgia Verdana "Trebuchet MS" "Comic Sans MS" Impact Webdings
+               Wingdings "Andale Mono" Tahoma)
+    local dir name
+    for dir in /System/Library/Fonts/Supplemental /Library/Fonts; do
+        [ -d "$dir" ] || continue
+        for name in "${fam[@]}"; do
+            for f in "$dir/$name"*.ttf "$dir/$name"*.ttc; do
+                [ -f "$f" ] || continue
+                [ -f "$fonts/$(basename "$f")" ] && continue
+                cp "$f" "$fonts/" 2>/dev/null && n=$((n + 1))
+            done
+        done
+    done
+
+    # anything the system does not have can still come from a bundled pack
+    local cf="$DEPS_WINE/../redist/corefonts"
+    if [ -d "$cf" ]; then
+        for f in "$cf"/*.ttf "$cf"/*.TTF; do
+            [ -f "$f" ] || continue
+            [ -f "$fonts/$(basename "$f")" ] && continue
+            cp "$f" "$fonts/" 2>/dev/null && n=$((n + 1))
+        done
+    fi
+
+    [ "$n" -gt 0 ] && note "installed $n fonts into the prefix"
+    return 0
+}
+
 # --- steam play compatibility tool -------------------------------------------
 # this is how proton does it: register a compat tool, then map it in the
 # registry. steam then offers Install for windows-only titles and launches them
@@ -457,6 +502,7 @@ cmd_install() {
 
     stage_bridge "$wine" "$prefix"
     stage_d3d "$wine" "$prefix"
+    install_fonts "$prefix"
 
     # seed the registry once so steam_api can find the client dll before a run
     WINEPREFIX="$prefix" WINEDEBUG=-all \
