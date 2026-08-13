@@ -119,8 +119,11 @@ def load_appinfo(path=APPINFO_PATH, only_appids=None):
 
 
 def _oslist(node):
+    # steam writes these with a space after the comma often enough that not
+    # stripping reads "windows, macos" as windows-only, and a game with a real
+    # mac build is then handed to wine. that is the one thing neutron must not do
     v = node.get("oslist", "")
-    return [s for s in str(v).split(",") if s]
+    return [s.strip().lower() for s in str(v).split(",") if s.strip()]
 
 
 def assess_macos_build(app):

@@ -862,13 +862,25 @@ cmd_enable_all() {
     mkdir -p "$NEUTRON_HOME/backup"
     [ -f "$NEUTRON_HOME/backup/appinfo.orig.vdf" ] || cp "$APPINFO" "$NEUTRON_HOME/backup/appinfo.orig.vdf"
     install_runtime
-    local n=0 id verdict action inst name
+    local n=0 back=0 id verdict action inst name
     while IFS='|' read -r id verdict action inst name; do
+        # a game we should never have touched: hand it back. the oslist parser
+        # read "windows, macos" as windows-only because of the space, so a game
+        # with a real mac build could end up going through wine
+        if [ "$action" = "macos" ] && overlay_present "$id"; then
+            if PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" revert \
+                 "$APPINFO" "$id" "$NEUTRON_HOME/backup/appinfo.orig.vdf" >/dev/null 2>&1; then
+                back=$((back + 1))
+                note "gave $name back to its own macOS build"
+            fi
+            continue
+        fi
         [ "$action" = "neutron" ] || continue
         if PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" enable "$APPINFO" "$id" >/dev/null 2>&1; then
             n=$((n + 1))
         fi
     done < <(classify)
+    [ "$back" = 0 ] || echo "put $back game(s) back on their own macOS build."
     echo "enabled $n windows game(s) inside steam."
     echo "start steam: each now has its own Install button, and Play runs it through neutron."
 }

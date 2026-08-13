@@ -369,7 +369,7 @@ fi
 # gate is getenv() != NULL, so unset it rather than exporting a 0.
 if [ "$hack22_off" = 1 ]; then export MNC_HACK22_OFF=1; else unset MNC_HACK22_OFF; fi
 
-say "launch pid=$$ ppid=$PPID pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') backend=$MNC_GAME_BACKEND exe=$exe"
+say "launch pid=$$ ppid=$PPID pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') appid=${appid:-none} backend=$MNC_GAME_BACKEND exe=$exe"
 
 run "$wine" "$exe" "$@" &
 game_pid=$!
