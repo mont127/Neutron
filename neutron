@@ -41,6 +41,26 @@ deploy_wine() {
     rsync -a --delete "$src/" "$dst/"
 }
 
+# the engine used to be unpacked only when there was none at all, so an engine
+# from an older release survived every later install. that is how machines ended
+# up without mnc-fonts after it was added to the bundle: the directory was never
+# there, so neutron-run never put it on the dyld path, wine could not find
+# freetype and no text rendered anywhere. the marker file is what says the engine
+# on disk is older than the one in the app.
+engine_stale() {
+    local want have
+    want="$(cat "$SELF_DIR/ENGINE" 2>/dev/null || true)"
+    [ -n "$want" ] || return 1
+    have="$(cat "$NEUTRON_HOME/engine" 2>/dev/null || echo 0)"
+    [ "$want" != "$have" ]
+}
+
+# D3DMetal is the user's own copy out of apple's toolkit and cannot be fetched
+# again from here, so it has to survive the engine being replaced. everything
+# else in mnc-d3d ships in the bundle.
+D3D_KEEP="D3DMetal.framework libd3dshared.dylib d3d11.dll d3d11_d3dm.dll
+dxgi.dll dxgi_d3dm.dll d3d12.dll d3d12_d3dm.dll d3d10_d3dm.dll"
+
 # the .app sets NEUTRON_BUNDLED_WINE to the private wine inside it; we copy it
 # out so it survives the app being thrown away. dev machines fall back to the
 # deps or build tree.
@@ -52,22 +72,61 @@ resolve_wine() {
     # the shipped app carries the engine as a zip; unpack it once, then it is
     # just a normal wine dir and the app can be thrown away
     if [ -n "${NEUTRON_WINE_ZIP:-}" ] && [ -f "$NEUTRON_WINE_ZIP" ] \
-       && [ ! -x "$DEPLOYED_WINE/loader/wine" ]; then
+       && { [ ! -x "$DEPLOYED_WINE/loader/wine" ] || engine_stale; }; then
+        local keep="" f
+        if [ -f "$DEPLOYED_WINE/mnc-d3d/libd3dshared.dylib" ]; then
+            keep="$NEUTRON_HOME/.d3dmetal-keep"
+            rm -rf "$keep"; mkdir -p "$keep"
+            for f in $D3D_KEEP; do
+                cp -R "$DEPLOYED_WINE/mnc-d3d/$f" "$keep/" 2>/dev/null || true
+            done
+        fi
         echo "  unpacking the wine engine (a few minutes, once)" >&2
         rm -rf "$DEPLOYED_WINE"; mkdir -p "$DEPLOYED_WINE"
         if ditto -x -k "$NEUTRON_WINE_ZIP" "$DEPLOYED_WINE" 2>/dev/null \
            || unzip -q "$NEUTRON_WINE_ZIP" -d "$DEPLOYED_WINE"; then
             chmod +x "$DEPLOYED_WINE/loader/wine" "$DEPLOYED_WINE/wine" \
                      "$DEPLOYED_WINE/server/wineserver" 2>/dev/null || true
+            # written here, not just in install: d3dmetal and apply both resolve
+            # the wine too, and without it they would unpack again every run
+            cp "$SELF_DIR/ENGINE" "$NEUTRON_HOME/engine" 2>/dev/null || true
+            if [ -n "$keep" ]; then
+                for f in $D3D_KEEP; do
+                    [ -e "$keep/$f" ] || continue
+                    rm -rf "${DEPLOYED_WINE:?}/mnc-d3d/$f"
+                    cp -R "$keep/$f" "$DEPLOYED_WINE/mnc-d3d/$f" 2>/dev/null || true
+                done
+                echo "  kept your D3DMetal files" >&2
+            fi
         else
             echo "  could not unpack $NEUTRON_WINE_ZIP" >&2
             rm -rf "$DEPLOYED_WINE"
         fi
+        if [ -n "$keep" ]; then rm -rf "$keep"; fi
     fi
     for d in "$DEPLOYED_WINE" "$DEPS_WINE" "$DEV_WINE"; do
         [ -x "$d/loader/wine" ] && { echo "$d"; return; }
     done
     return 1
+}
+
+# the installer runs wine itself (wineboot to build the prefix, and the registry
+# seed), and it used to do that with DYLD_FALLBACK_LIBRARY_PATH=/usr/local/lib.
+# a mac without homebrew has no freetype or fontconfig there, so the prefix was
+# built by a wine that could not load a font library at all. build the same path
+# neutron-run uses, out of the engine's own copies.
+engine_dyld() {
+    local wine="$1" p d
+    p="$wine/mnc-d3d"
+    for d in mnc-fonts mnc-tls mnc-vulkan mnc-sdl; do
+        if [ -d "$wine/$d" ]; then p="$p:$wine/$d"; fi
+    done
+    if [ -d "$wine/dlls/winemac.drv" ]; then p="$wine/dlls/winemac.drv:$p"; fi
+    for d in /usr/local/lib /usr/local/opt/freetype/lib \
+             /usr/local/opt/fontconfig/lib /usr/local/opt/gnutls/lib /usr/lib; do
+        p="$p:$d"
+    done
+    echo "$p"
 }
 
 # the bridge ships inside the unified wine; only fall back to the build tree
@@ -127,6 +186,9 @@ stage_bridge() {
         cp "$src/i386-windows/lsteamclient.dll" "$sdir/steamclient.dll"
     [ -f "$BIN/steam.exe" ] && cp "$BIN/steam.exe" "$sdir/steam.exe"
 
+    # an unguarded cp into a system32 that wineboot never created aborted the
+    # whole install here, under errexit, with no message
+    mkdir -p "$prefix/drive_c/windows/system32" "$prefix/drive_c/windows/syswow64" 2>/dev/null || true
     cp "$src/x86_64-windows/lsteamclient.dll" "$prefix/drive_c/windows/system32/lsteamclient.dll"
     [ -f "$src/i386-windows/lsteamclient.dll" ] && \
         cp "$src/i386-windows/lsteamclient.dll" "$prefix/drive_c/windows/syswow64/lsteamclient.dll"
@@ -147,13 +209,25 @@ d3d_pack_dir() {
 }
 
 stage_d3d() {
-    local wine="$1" prefix="$2" pack sys32 n=0 f
+    local wine="$1" prefix="$2" pack sys32 n=0 bad=0 f
     pack="$(d3d_pack_dir "$wine")" || { note "no mnc-d3d pack, dx games will not start"; return 0; }
     sys32="$prefix/drive_c/windows/system32"
+    # when wineboot had not built the prefix, every cp here failed and the only
+    # sign was "staged 0 graphics dlls" going past, so say it plainly instead
+    mkdir -p "$sys32" 2>/dev/null || true
+    if [ ! -d "$sys32" ]; then
+        note "cannot write $sys32, no graphics dlls staged and dx games will not start"
+        return 0
+    fi
     for f in "$pack"/*.dll; do
         [ -f "$f" ] || continue
-        cp "$f" "$sys32/$(basename "$f")" && n=$((n + 1))
+        if cp "$f" "$sys32/$(basename "$f")" 2>/dev/null; then
+            n=$((n + 1))
+        else
+            bad=$((bad + 1))
+        fi
     done
+    [ "$bad" = 0 ] || note "could not stage $bad graphics dll(s) into $sys32"
     note "staged $n graphics dlls from $(basename "$pack")"
 
     if ! d3dmetal_present "$wine"; then
@@ -494,10 +568,14 @@ cmd_install() {
     cp "$SELF_DIR/src/neutron-play" "$BIN/neutron-play"
     chmod +x "$BIN/neutron-run" "$BIN/neutron-play"
 
+    MNC_DYLD="$(engine_dyld "$wine")"; export MNC_DYLD
     if [ ! -d "$prefix/drive_c" ]; then
         note "creating prefix $prefix"
         WINEPREFIX="$prefix" WINEARCH=win64 WINEDEBUG=-all \
-            arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="${MNC_DYLD:-/usr/local/lib}"; exec "$0" wineboot --init' "$wine/wine" >/dev/null 2>&1 || true
+            arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$0" wineboot --init' "$wine/wine" >/dev/null 2>&1 || true
+    fi
+    if [ ! -d "$prefix/drive_c/windows/system32" ]; then
+        note "wineboot did not build $prefix - graphics dlls and the bridge cannot be staged"
     fi
 
     stage_bridge "$wine" "$prefix"
@@ -506,7 +584,7 @@ cmd_install() {
 
     # seed the registry once so steam_api can find the client dll before a run
     WINEPREFIX="$prefix" WINEDEBUG=-all \
-        arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="${MNC_DYLD:-/usr/local/lib}"; exec "$0" "$1" --once' "$wine/wine" "$BIN/steam.exe" >/dev/null 2>&1 || true
+        arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$0" "$1" --once' "$wine/wine" "$BIN/steam.exe" >/dev/null 2>&1 || true
 
     cat > "$CONFIG" <<EOF
 NEUTRON_WINE="$wine"
