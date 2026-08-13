@@ -61,6 +61,68 @@ engine_stale() {
 D3D_KEEP="D3DMetal.framework libd3dshared.dylib d3d11.dll d3d11_d3dm.dll
 dxgi.dll dxgi_d3dm.dll d3d12.dll d3d12_d3dm.dll d3d10_d3dm.dll"
 
+# replace the engine on disk with the one in a zip. the user's own D3DMetal
+# comes out of apple's toolkit and cannot be fetched from here, so it is carried
+# across.  install_engine <zip> <sha256 file> <ENGINE marker file>
+install_engine() {
+    local zip="$1" shafile="$2" marker="$3" keep="" f want have unpacked=0 missing=""
+    if [ -f "$DEPLOYED_WINE/mnc-d3d/libd3dshared.dylib" ]; then
+        keep="$NEUTRON_HOME/.d3dmetal-keep"
+        rm -rf "$keep"; mkdir -p "$keep"
+        for f in $D3D_KEEP; do
+            cp -R "$DEPLOYED_WINE/mnc-d3d/$f" "$keep/" 2>/dev/null || true
+        done
+    fi
+    # check the archive before spending minutes on it. one that arrived
+    # truncated otherwise fails with a raw CRC dump from unzip, which reads like
+    # a bug in neutron rather than a damaged download.
+    if [ -f "$shafile" ]; then
+        want="$(cut -d' ' -f1 < "$shafile" 2>/dev/null || true)"
+        have="$(shasum -a 256 "$zip" 2>/dev/null | cut -d' ' -f1)"
+        if [ -n "$want" ] && [ "$want" != "$have" ]; then
+            [ -z "$keep" ] || rm -rf "$keep"
+            echo "  the engine does not match what was published." >&2
+            echo "  (expected $want, got ${have:-nothing})" >&2
+            return 1
+        fi
+    fi
+    echo "  unpacking the wine engine (a few minutes)" >&2
+    rm -rf "$DEPLOYED_WINE"; mkdir -p "$DEPLOYED_WINE"
+    if ditto -x -k "$zip" "$DEPLOYED_WINE" 2>/dev/null \
+       || unzip -q "$zip" -d "$DEPLOYED_WINE"; then
+        unpacked=1
+        # both tools can report success after extracting only part of a damaged
+        # archive, so do not take their word for it
+        for f in loader/wine wine server/wineserver mnc-d3d \
+                 dlls/lsteamclient/lsteamclient.so; do
+            [ -e "$DEPLOYED_WINE/$f" ] || missing="$missing $f"
+        done
+        [ -z "$missing" ] || unpacked=0
+    fi
+    if [ "$unpacked" != 1 ]; then
+        [ -z "$missing" ] || echo "  the engine unpacked incomplete, missing:$missing" >&2
+        echo "  could not unpack the engine, so nothing was replaced." >&2
+        rm -rf "$DEPLOYED_WINE"
+        [ -z "$keep" ] || rm -rf "$keep"
+        return 1
+    fi
+    chmod +x "$DEPLOYED_WINE/loader/wine" "$DEPLOYED_WINE/wine" \
+             "$DEPLOYED_WINE/server/wineserver" 2>/dev/null || true
+    # written here rather than only in install: d3dmetal and apply resolve the
+    # wine too, and without it they would unpack again on every run
+    cp "$marker" "$NEUTRON_HOME/engine" 2>/dev/null || true
+    if [ -n "$keep" ]; then
+        for f in $D3D_KEEP; do
+            [ -e "$keep/$f" ] || continue
+            rm -rf "${DEPLOYED_WINE:?}/mnc-d3d/$f"
+            cp -R "$keep/$f" "$DEPLOYED_WINE/mnc-d3d/$f" 2>/dev/null || true
+        done
+        echo "  kept your D3DMetal files" >&2
+        rm -rf "$keep"
+    fi
+    return 0
+}
+
 # the .app sets NEUTRON_BUNDLED_WINE to the private wine inside it; we copy it
 # out so it survives the app being thrown away. dev machines fall back to the
 # deps or build tree.
@@ -73,72 +135,15 @@ resolve_wine() {
     # just a normal wine dir and the app can be thrown away
     if [ -n "${NEUTRON_WINE_ZIP:-}" ] && [ -f "$NEUTRON_WINE_ZIP" ] \
        && { [ ! -x "$DEPLOYED_WINE/loader/wine" ] || engine_stale; }; then
-        local keep="" f
-        if [ -f "$DEPLOYED_WINE/mnc-d3d/libd3dshared.dylib" ]; then
-            keep="$NEUTRON_HOME/.d3dmetal-keep"
-            rm -rf "$keep"; mkdir -p "$keep"
-            for f in $D3D_KEEP; do
-                cp -R "$DEPLOYED_WINE/mnc-d3d/$f" "$keep/" 2>/dev/null || true
-            done
-        fi
-        # check the download before spending minutes on it. a .dmg that arrived
-        # truncated fails here with a raw CRC dump from unzip, which reads like a
-        # bug in neutron rather than a damaged file.
-        if [ -f "$SELF_DIR/ENGINE.sha256" ]; then
-            local want have
-            want="$(cut -d' ' -f1 < "$SELF_DIR/ENGINE.sha256" 2>/dev/null || true)"
-            have="$(shasum -a 256 "$NEUTRON_WINE_ZIP" 2>/dev/null | cut -d' ' -f1)"
-            if [ -n "$want" ] && [ "$want" != "$have" ]; then
-                if [ -n "$keep" ]; then rm -rf "$keep"; fi
-                echo "  this copy of Neutron is damaged: the engine inside it does not" >&2
-                echo "  match what was published. download the .dmg again from" >&2
-                echo "  github.com/mont127/Neutron/releases" >&2
-                echo "  (expected $want, got ${have:-nothing})" >&2
-                return 1
-            fi
-        fi
-        echo "  unpacking the wine engine (a few minutes, once)" >&2
-        rm -rf "$DEPLOYED_WINE"; mkdir -p "$DEPLOYED_WINE"
-        local unpacked=0 missing=""
-        if ditto -x -k "$NEUTRON_WINE_ZIP" "$DEPLOYED_WINE" 2>/dev/null \
-           || unzip -q "$NEUTRON_WINE_ZIP" -d "$DEPLOYED_WINE"; then
-            unpacked=1
-            # both tools can report success after extracting only part of a
-            # damaged archive, so do not take their word for it
-            for f in loader/wine wine server/wineserver mnc-d3d \
-                     dlls/lsteamclient/lsteamclient.so; do
-                [ -e "$DEPLOYED_WINE/$f" ] || missing="$missing $f"
-            done
-            [ -z "$missing" ] || unpacked=0
-        fi
-        if [ "$unpacked" = 1 ]; then
-            chmod +x "$DEPLOYED_WINE/loader/wine" "$DEPLOYED_WINE/wine" \
-                     "$DEPLOYED_WINE/server/wineserver" 2>/dev/null || true
-            # written here, not just in install: d3dmetal and apply both resolve
-            # the wine too, and without it they would unpack again every run
-            cp "$SELF_DIR/ENGINE" "$NEUTRON_HOME/engine" 2>/dev/null || true
-            if [ -n "$keep" ]; then
-                for f in $D3D_KEEP; do
-                    [ -e "$keep/$f" ] || continue
-                    rm -rf "${DEPLOYED_WINE:?}/mnc-d3d/$f"
-                    cp -R "$keep/$f" "$DEPLOYED_WINE/mnc-d3d/$f" 2>/dev/null || true
-                done
-                echo "  kept your D3DMetal files" >&2
-            fi
-        else
-            # do NOT fall through to another wine here. the deps tree belongs to
-            # macncheese and has no lsteamclient, so carrying on produced
-            # "no lsteamclient in the wine (was it built with the bridge?)",
-            # which points at the wrong thing entirely.
-            [ -z "$missing" ] || echo "  the engine unpacked incomplete, missing:$missing" >&2
-            echo "  could not unpack the engine, so nothing was installed." >&2
-            echo "  the download is most likely damaged: fetch the .dmg again from" >&2
-            echo "  github.com/mont127/Neutron/releases" >&2
-            rm -rf "$DEPLOYED_WINE"
-            if [ -n "$keep" ]; then rm -rf "$keep"; fi
+        # do NOT fall through to another wine when this fails. the deps tree
+        # belongs to macncheese and has no lsteamclient, so carrying on produced
+        # "no lsteamclient in the wine (was it built with the bridge?)", which
+        # points at the wrong thing entirely.
+        if ! install_engine "$NEUTRON_WINE_ZIP" "$SELF_DIR/ENGINE.sha256" "$SELF_DIR/ENGINE"; then
+            echo "  this copy of Neutron looks damaged. download the .dmg again" >&2
+            echo "  from github.com/mont127/Neutron/releases" >&2
             return 1
         fi
-        if [ -n "$keep" ]; then rm -rf "$keep"; fi
     fi
     for d in "$DEPLOYED_WINE" "$DEPS_WINE" "$DEV_WINE"; do
         [ -x "$d/loader/wine" ] || continue
@@ -1342,6 +1347,10 @@ cmd_remove() {
 # behind your back.
 
 REPO_URL="https://api.github.com/repos/mont127/Neutron/releases/latest"
+# the engine rides along as a release asset, so an engine fix can reach people
+# through the update button instead of only through a fresh .dmg
+ENGINE_URL="https://github.com/mont127/Neutron/releases/download"
+ENGINE_ASSET="wine-unified-bundle.zip"
 
 # github allows 60 unauthenticated calls an hour, and this runs on every launch,
 # so the answer is cached for an hour. system curl, not python: framework pythons
@@ -1374,7 +1383,7 @@ cmd_autoupdate() {
 }
 
 cmd_update() {
-    local check=0 tag cur tmp
+    local check=0 tag cur tmp engine_changed=0
     [ "${1:-}" = "--check" ] && check=1
     cur="$(installed_version)"
 
@@ -1402,13 +1411,32 @@ cmd_update() {
     fi
 
     # a tree with no ENGINE marker predates the check and says nothing about
-    # engine compatibility; only an explicit, different marker blocks the update
+    # engine compatibility; only an explicit, different marker means work to do
     new_engine="$(cat "$tmp/ENGINE" 2>/dev/null || true)"
     if [ -n "$new_engine" ] && [ "$new_engine" != "$(installed_engine)" ]; then
-        rm -rf "$tmp"
-        echo "  v$tag needs a newer engine than you have."
-        echo "  download the .dmg from github.com/mont127/Neutron/releases and re-install."
-        return 1
+        # this used to stop here and tell you to fetch the .dmg by hand, which
+        # meant an engine bug could not be repaired by an update at all. 1.0
+        # shipped a stale engine for exactly that reason.
+        if steam_running; then
+            rm -rf "$tmp"
+            echo "  v$tag ships a new engine, which cannot be replaced while steam is open."
+            echo "  quit steam and update again."
+            return 1
+        fi
+        echo "  v$tag ships a new engine, fetching it (about 690 MB, once)"
+        if ! /usr/bin/curl -fL --retry 2 --max-time 3600 -H "User-Agent: Neutron" \
+             -o "$tmp/engine.zip" "$ENGINE_URL/v$tag/$ENGINE_ASSET" 2>/dev/null; then
+            rm -rf "$tmp"
+            echo "  could not download the engine for v$tag."
+            echo "  get the .dmg from github.com/mont127/Neutron/releases instead."
+            return 1
+        fi
+        if ! install_engine "$tmp/engine.zip" "$tmp/ENGINE.sha256" "$tmp/ENGINE"; then
+            rm -rf "$tmp"
+            echo "  the engine did not install, so the one you have is untouched."
+            return 1
+        fi
+        engine_changed=1
     fi
 
     rm -rf "$NEUTRON_HOME/app.prev"
@@ -1424,6 +1452,19 @@ cmd_update() {
     done
     echo "$tag" > "$NEUTRON_HOME/version"
     rm -rf "$tmp"
+    # the prefix holds copies of the engine's own dlls, so a new engine with an
+    # old prefix runs yesterday's graphics and bridge. that mismatch is what
+    # rendered dxmt black and broke cs2, so restage rather than leave it.
+    if [ "$engine_changed" = 1 ]; then
+        local w
+        if w="$(resolve_wine)"; then
+            note "restaging the prefix for the new engine"
+            MNC_DYLD="$(engine_dyld "$w")"; export MNC_DYLD
+            fix_c_drive "$PREFIX_DEFAULT"
+            stage_bridge "$w" "$PREFIX_DEFAULT" >/dev/null 2>&1 || true
+            stage_d3d "$w" "$PREFIX_DEFAULT"    >/dev/null 2>&1 || true
+        fi
+    fi
     note "updated to v$tag (previous kept in app.prev)"
     note "run 'neutron apply' with steam closed if games need re-enabling"
 }

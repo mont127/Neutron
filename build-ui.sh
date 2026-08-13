@@ -62,8 +62,17 @@ if [ -n "$WINE_ZIP" ]; then
     # the installer checks this before it spends minutes unpacking. a .dmg that
     # arrived truncated otherwise fails with a raw CRC dump from unzip, which
     # reads like a bug rather than a damaged download
-    shasum -a 256 "$WINE_ZIP" | cut -d' ' -f1 \
-        > "$APP/Contents/Resources/installer/ENGINE.sha256"
+    if [ -f "$SELF/ENGINE.sha256" ] && [ "$(shasum -a 256 "$WINE_ZIP" | cut -d' ' -f1)" \
+         = "$(cut -d' ' -f1 < "$SELF/ENGINE.sha256")" ]; then
+        cp "$SELF/ENGINE.sha256" "$APP/Contents/Resources/installer/ENGINE.sha256"
+    else
+        # the committed hash is stale or missing; record this zip's and say so,
+        # because updates fetch the asset named by the committed one
+        shasum -a 256 "$WINE_ZIP" | cut -d' ' -f1 \
+            > "$APP/Contents/Resources/installer/ENGINE.sha256"
+        cp "$APP/Contents/Resources/installer/ENGINE.sha256" "$SELF/ENGINE.sha256"
+        echo "  note: refreshed ENGINE.sha256, commit it with ENGINE"
+    fi
     echo "  engine sha256 $(cut -c1-16 < "$APP/Contents/Resources/installer/ENGINE.sha256")..."
 fi
 

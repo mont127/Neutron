@@ -57,4 +57,10 @@ echo "staged $(du -sh "$STAGE" | cut -f1), zipping (slow)..."
 rm -f "$OUT"
 ( cd "$STAGE" && zip -r -q -y "$OUT" . )
 rm -rf "$STAGE"
+# committed alongside ENGINE, so the source tarball an update downloads carries
+# the hash of the engine asset it should fetch. without it an update could not
+# tell a damaged download from a real one.
+SELF="$(cd "$(dirname "$0")" && pwd)"
+shasum -a 256 "$OUT" | cut -d' ' -f1 > "$SELF/ENGINE.sha256"
 echo "bundle: $OUT ($(du -h "$OUT" | cut -f1))"
+echo "  sha256 $(cut -c1-16 < "$SELF/ENGINE.sha256")... recorded in ENGINE.sha256"
