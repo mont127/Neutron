@@ -181,6 +181,11 @@ if [ "$MNC_GAME_BACKEND" = "dxvk" ]; then
     unset _mvk _icd _icd_dir
 fi
 
+if [ "${MNC_GAME_BACKEND:-d3dmetal}" = d3dmetal ] \
+   && [ ! -f "$wine_dir/mnc-d3d/libd3dshared.dylib" ]; then
+    echo "neutron: D3DMetal is not installed - run 'neutron d3dmetal <toolkit.dmg>', or pick dxvk/dxmt" >&2
+fi
+
 # D3DMetal dlopens its framework from next to this dylib. without it ntdll's
 # d3d fallback returns STATUS_DLL_NOT_FOUND.
 for d in "$wine_dir/mnc-d3d" "$(dirname "$wine_dir")/mnc-d3d"; do

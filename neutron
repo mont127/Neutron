@@ -156,6 +156,14 @@ stage_d3d() {
     done
     note "staged $n graphics dlls from $(basename "$pack")"
 
+    if ! d3dmetal_present "$wine"; then
+        note "D3DMetal is not installed. it is apple's and cannot be shipped, so"
+        note "download the Game Porting Toolkit ('Evaluation environment for"
+        note "Windows games') from developer.apple.com and run:"
+        note "    neutron d3dmetal /path/to/Evaluation_environment_*.dmg"
+        note "until then use the dxvk or dxmt backend."
+    fi
+
     # dxmt caches compiled shaders per exe and keys them on its own version only,
     # not on which airconv built them. an upgrade that changes the shader abi
     # leaves stale AIR behind, which renders black. cheap to rebuild, so drop it.
@@ -176,6 +184,66 @@ stage_d3d() {
         cp "$SELF_DIR/vendor/dxvk-1.10.3/x86_64/dxgi.dll" "$sys32/dxgi_dxvk.dll" \
             && note "staged real DXVK dxgi over the pack's wined3d one"
     fi
+}
+
+# --- d3dmetal from apple's toolkit ------------------------------------------
+# D3DMetal is Apple's, under a licence that does not allow redistribution, so it
+# is NOT bundled. point neutron at the "Evaluation environment for Windows games"
+# disk image (or an already-extracted redist dir) and the pieces are copied into
+# the engine under the names the loader expects. mapping verified by hash against
+# a known-good pack: one GPTK dll serves both the canonical and the _d3dm slot.
+
+d3dmetal_present() {
+    local pack
+    pack="$(d3d_pack_dir "$1")" || return 1
+    [ -e "$pack/D3DMetal.framework" ] && [ -f "$pack/libd3dshared.dylib" ] \
+        && [ -f "$pack/d3d11_d3dm.dll" ]
+}
+
+cmd_d3dmetal() {
+    local src="${1:-}" wine pack redist mp="" rc=0
+    [ -n "$src" ] || die "usage: neutron d3dmetal <Evaluation_environment_for_Windows_games_*.dmg | redist dir>"
+    [ -e "$src" ] || die "no such file: $src"
+    wine="$(resolve_wine)" || die "no unified wine found"
+    pack="$(d3d_pack_dir "$wine")" || die "no mnc-d3d dir in the engine"
+
+    if [ "${src##*.}" = "dmg" ]; then
+        mp="$(hdiutil attach "$src" -nobrowse -readonly 2>/dev/null | grep -o '/Volumes/.*' | head -1)"
+        [ -n "$mp" ] || die "could not mount $src"
+        redist="$mp/redist"
+    else
+        redist="$src"
+        [ -d "$redist/lib" ] || redist="$src/redist"
+    fi
+
+    local ext="$redist/lib/external" win="$redist/lib/wine/x86_64-windows"
+    if [ ! -d "$ext" ] || [ ! -d "$win" ]; then
+        [ -n "$mp" ] && hdiutil detach "$mp" -quiet 2>/dev/null
+        die "that does not look like the toolkit (no redist/lib/external)"
+    fi
+
+    rm -rf "$pack/D3DMetal.framework"
+    cp -R "$ext/D3DMetal.framework" "$pack/D3DMetal.framework" || rc=1
+    cp "$ext/libd3dshared.dylib" "$pack/libd3dshared.dylib" || rc=1
+    note "installed D3DMetal.framework + libd3dshared.dylib"
+
+    # one source dll fills both slots: canonical is the default a game falls to,
+    # _d3dm is where the loader routes the d3dmetal backend explicitly
+    local n=0
+    _put() { [ -f "$win/$1" ] && { cp "$win/$1" "$pack/$2" && n=$((n + 1)); }; }
+    _put d3d11.dll d3d11.dll;  _put d3d11.dll d3d11_d3dm.dll
+    _put dxgi.dll  dxgi.dll;   _put dxgi.dll  dxgi_d3dm.dll
+    _put d3d12.dll d3d12.dll;  _put d3d12.dll d3d12_d3dm.dll
+    _put d3d10.dll d3d10_d3dm.dll
+    unset -f _put
+    note "installed $n d3dmetal dlls"
+
+    [ -n "$mp" ] && hdiutil detach "$mp" -quiet 2>/dev/null
+    [ "$rc" = 0 ] || die "copy failed"
+
+    # push them into the prefix too so the next launch picks them up
+    [ -d "$PREFIX_DEFAULT/drive_c" ] && stage_d3d "$wine" "$PREFIX_DEFAULT"
+    note "d3dmetal ready"
 }
 
 # --- steam play compatibility tool -------------------------------------------
@@ -1156,10 +1224,11 @@ case "${1:-}" in
     remove)           shift; cmd_remove "$@" ;;
     scan)             shift; cmd_scan "$@" ;;
     scan-machine)     shift; classify "$@" ;;
+    d3dmetal)         shift; cmd_d3dmetal "$@" ;;
     update)           shift; cmd_update "$@" ;;
     autoupdate)       shift; cmd_autoupdate "$@" ;;
     rollback)         shift; cmd_rollback "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|status|update [--check]|autoupdate on|off|rollback|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|d3dmetal <dmg>|status|update [--check]|autoupdate on|off|rollback|uninstall [--purge]}" >&2; exit 2 ;;
 esac

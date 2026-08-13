@@ -16,10 +16,19 @@ command -v rsync >/dev/null || { echo "need rsync" >&2; exit 1; }
 
 echo "staging from $SRC"
 rm -rf "$STAGE"; mkdir -p "$STAGE" "$(dirname "$OUT")"
+# D3DMetal is apple's and its licence forbids redistribution, so the toolkit's
+# pieces are left out and the user points neutron at their own copy with
+#   neutron d3dmetal <Evaluation_environment_for_Windows_games_*.dmg>
 rsync -a \
     --exclude='*.o' --exclude='*.a' --exclude='*.lib' \
     --exclude='*_test.exe' --exclude='*.cross.o' \
     --exclude='.git' --exclude='*.log' \
+    --exclude='mnc-d3d/D3DMetal.framework' \
+    --exclude='mnc-d3d/libd3dshared.dylib' \
+    --exclude='mnc-d3d/d3d11.dll' --exclude='mnc-d3d/d3d11_d3dm.dll' \
+    --exclude='mnc-d3d/dxgi.dll' --exclude='mnc-d3d/dxgi_d3dm.dll' \
+    --exclude='mnc-d3d/d3d12.dll' --exclude='mnc-d3d/d3d12_d3dm.dll' \
+    --exclude='mnc-d3d/d3d10_d3dm.dll' \
     "$SRC/" "$STAGE/"
 
 for d in nls fonts; do
