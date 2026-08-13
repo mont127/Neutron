@@ -171,8 +171,16 @@ export FONTCONFIG_PATH="${FONTCONFIG_PATH:-/usr/local/opt/fontconfig/etc/fonts}"
 # hand back a black window.
 if [ "$MNC_GAME_BACKEND" = "dxmt" ]; then
     _wm="$wine_dir/dlls/winemetal/winemetal.so"
-    if [ -f "$_wm" ] && ! nm -a "$_wm" 2>/dev/null | grep -q setup_binding_table2; then
-        echo "neutron: this wine has the old winemetal, dxmt renders black. re-run 'neutron install'" >&2
+    if [ -f "$_wm" ]; then
+        # grep -c, not grep -q, for the same reason as the dxgi check right
+        # above: -q exits on the first match, nm takes SIGPIPE, and pipefail
+        # reports 141 for a pipeline that did match. this said "old winemetal"
+        # about a winemetal that was perfectly current.
+        _n="$(nm -a "$_wm" 2>/dev/null | grep -c setup_binding_table2 || true)"
+        if [ "${_n:-0}" = 0 ]; then
+            echo "neutron: this wine has the old winemetal, dxmt renders black. re-run 'neutron install'" >&2
+        fi
+        unset _n
     fi
     unset _wm
 fi

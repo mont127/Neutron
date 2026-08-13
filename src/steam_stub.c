@@ -59,15 +59,15 @@ int main(int argc, char **argv)
         /* proton presents the bridge under steam's own name and path rather than
          * as lsteamclient.dll in system32. keep the same layout: a game (and
          * anything inspecting the process) then sees the module it expects. */
-        /* both point at steamclient.dll on purpose. steam_api64 loads the file
-         * named here, then looks the module back up by the name
-         * "steamclient.dll" to reach Steam_ReleaseThreadLocalMemory. loaded as
-         * steamclient64.dll that lookup returns NULL, GetProcAddress falls
-         * through to the main exe, the entry point is not there and a steam DRM
-         * game dies with "Application load error 3:0000065432". neutron is
-         * 64-bit only, so the file at this path is the 64-bit bridge. */
+        /* each key names the build that matches its own word size. pointing the
+         * 64-bit key at steamclient.dll made a 64-bit game able to load BOTH
+         * files, since that path stopped being the 32-bit build, and two live
+         * bridges in one process crashes cs2 on startup. it was done to satisfy
+         * steam_api64 looking the module back up as "steamclient.dll" for
+         * Steam_ReleaseThreadLocalMemory, which a steam DRM game needs; that
+         * wants a forwarder at steamclient64.dll, not a second real bridge. */
         set_str(active, "SteamClientDll", "C:\\Program Files (x86)\\Steam\\steamclient.dll");
-        set_str(active, "SteamClientDll64", "C:\\Program Files (x86)\\Steam\\steamclient.dll");
+        set_str(active, "SteamClientDll64", "C:\\Program Files (x86)\\Steam\\steamclient64.dll");
         set_str(active, "Universe", "Public");
         RegCloseKey(active);
     }
