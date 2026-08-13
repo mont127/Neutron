@@ -129,6 +129,31 @@ engine_dyld() {
     echo "$p"
 }
 
+# drive_c is a poor test for "this prefix exists": anything that creates a
+# directory inside it makes the test pass, and wineboot then never runs. even
+# system.reg is not enough, because a prefix that wine half-initialised at launch
+# has one while system32 holds nothing but the dlls we staged. kernel32 is put
+# there by wineboot and by nothing else here.
+prefix_ready() {
+    [ -f "$1/system.reg" ] && [ -f "$1/drive_c/windows/system32/kernel32.dll" ]
+}
+
+# when wine initialises a prefix itself it assigns drive letters from whatever is
+# mounted, and with no c: yet it will hand C: to the first volume it finds. on a
+# machine installing from the .dmg that is the Neutron disk image, and every
+# launch afterwards dies with "could not open working directory C:\windows\".
+fix_c_drive() {
+    local prefix="$1" cur
+    [ -d "$prefix/dosdevices" ] || return 0
+    cur="$(readlink "$prefix/dosdevices/c:" 2>/dev/null || true)"
+    case "$cur" in
+        ../drive_c|"$prefix/drive_c") return 0 ;;
+    esac
+    ln -sfn ../drive_c "$prefix/dosdevices/c:" 2>/dev/null || return 0
+    rm -f "$prefix/dosdevices/c::" 2>/dev/null || true
+    note "repaired the C: drive, it pointed at ${cur:-nothing}"
+}
+
 # the bridge ships inside the unified wine; only fall back to the build tree
 bridge_src() {
     local wine="$1" b
@@ -175,6 +200,14 @@ stage_bridge() {
         [ -f "$src/i386-windows/lsteamclient.dll" ] && cp "$src/i386-windows/lsteamclient.dll" "$dst/i386-windows/"
     fi
 
+    # never build this tree ourselves when wineboot has not run: a drive_c that
+    # exists is exactly what stopped wineboot from ever running, and wine then
+    # initialised the prefix at launch and gave C: to a mounted disk image
+    if ! prefix_ready "$prefix"; then
+        note "prefix is not built, bridge not staged"
+        return 0
+    fi
+
     # into the prefix so LoadLibrary and the registry path find the pe
     # proton copies the bridge into C:\Program Files (x86)\Steam under steam's own
     # dll names; a game then loads a module called steamclient64.dll from the
@@ -212,13 +245,14 @@ stage_d3d() {
     local wine="$1" prefix="$2" pack sys32 n=0 bad=0 f
     pack="$(d3d_pack_dir "$wine")" || { note "no mnc-d3d pack, dx games will not start"; return 0; }
     sys32="$prefix/drive_c/windows/system32"
-    # when wineboot had not built the prefix, every cp here failed and the only
-    # sign was "staged 0 graphics dlls" going past, so say it plainly instead
-    mkdir -p "$sys32" 2>/dev/null || true
-    if [ ! -d "$sys32" ]; then
-        note "cannot write $sys32, no graphics dlls staged and dx games will not start"
+    # same reason as the bridge: do not conjure drive_c. when wineboot had not
+    # built the prefix, every cp here used to fail and the only sign was
+    # "staged 0 graphics dlls" going past, so say it plainly instead
+    if ! prefix_ready "$prefix"; then
+        note "prefix is not built, no graphics dlls staged and dx games will not start"
         return 0
     fi
+    mkdir -p "$sys32" 2>/dev/null || true
     for f in "$pack"/*.dll; do
         [ -f "$f" ] || continue
         if cp "$f" "$sys32/$(basename "$f")" 2>/dev/null; then
@@ -569,14 +603,40 @@ cmd_install() {
     chmod +x "$BIN/neutron-run" "$BIN/neutron-play"
 
     MNC_DYLD="$(engine_dyld "$wine")"; export MNC_DYLD
-    if [ ! -d "$prefix/drive_c" ]; then
+    # before wineboot as well as after: a prefix left over from 0.7 has C:
+    # pointing at a mounted disk image, and repairing a prefix through that is
+    # not something to find out about afterwards
+    fix_c_drive "$prefix"
+    # a prefix that wine half-initialised at launch cannot be repaired in place:
+    # wineboot reads a current-looking system.reg, skips the update, and system32
+    # keeps nothing but the dlls we staged, so nothing will ever run. build a new
+    # one and bring the user's files across.
+    if [ -d "$prefix" ] && ! prefix_ready "$prefix"; then
+        note "prefix is damaged, rebuilding it"
+        rm -rf "$prefix.damaged"
+        mv "$prefix" "$prefix.damaged" 2>/dev/null || true
+    fi
+    if ! prefix_ready "$prefix"; then
         note "creating prefix $prefix"
         WINEPREFIX="$prefix" WINEARCH=win64 WINEDEBUG=-all \
             arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$0" wineboot --init' "$wine/wine" >/dev/null 2>&1 || true
+        # wineboot returns before the prefix has finished filling itself in, and
+        # everything below reads it
+        local _w=0
+        while [ "$_w" -lt 20 ]; do
+            prefix_ready "$prefix" && break
+            sleep 1
+            _w=$((_w + 1))
+        done
+        if [ -d "$prefix.damaged/drive_c/users" ] && [ -d "$prefix/drive_c/users" ]; then
+            cp -R "$prefix.damaged/drive_c/users/." "$prefix/drive_c/users/" 2>/dev/null || true
+            note "carried your saved data over from the old prefix"
+        fi
     fi
-    if [ ! -d "$prefix/drive_c/windows/system32" ]; then
-        note "wineboot did not build $prefix - graphics dlls and the bridge cannot be staged"
+    if ! prefix_ready "$prefix"; then
+        note "wineboot did not build $prefix, so games will not start"
     fi
+    fix_c_drive "$prefix"
 
     stage_bridge "$wine" "$prefix"
     stage_d3d "$wine" "$prefix"
