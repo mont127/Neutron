@@ -18,12 +18,15 @@ echo "$(date '+%F %T') args: $* cwd: $PWD" >> "$LOG"
 appid=""
 want_exe=""
 game_args=()
+# a trailing --exe or --appid (steam appends the launch options box verbatim)
+# leaves $# at 1, and "shift 2" then fails and shifts nothing: the loop never
+# ends and the launcher spins at 100% cpu with no game
 while [ $# -gt 0 ]; do
     case "$1" in
-        --appid) appid="${2:-}"; shift 2 ;;
+        --appid) appid="${2:-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
         # the exe steam lists for this game, relative to the install dir.
         # matters for anything shipping several (cs2 also has the legacy csgo ones)
-        --exe) want_exe="${2:-}"; shift 2 ;;
+        --exe) want_exe="${2:-}"; if [ $# -ge 2 ]; then shift 2; else shift; fi ;;
         backend=*) export MNC_GAME_BACKEND="${1#backend=}"; shift ;;
         hud=*)     export NEUTRON_HUD="${1#hud=}"; shift ;;
         debug=*)   export NEUTRON_DEBUG="${1#debug=}"; shift ;;
@@ -75,19 +78,30 @@ findexe() {
 }
 
 exe=""
+src=""
 base="$(find_install_dir 2>/dev/null || true)"
 [ -z "$base" ] && [ -d "$PWD" ] && base="$PWD"
 
 # steam's own path for this game wins; windows separators become unix ones
 if [ -n "$want_exe" ] && [ -n "$base" ]; then
     cand="$base/$(printf '%s' "$want_exe" | tr '\\' '/')"
-    [ -f "$cand" ] && exe="$cand"
+    if [ -f "$cand" ]; then
+        exe="$cand"; src=steam
+    else
+        # the fallbacks below run a different program without saying so, and the
+        # biggest .exe in a game folder is often an updater or a crash handler
+        echo "steam's --exe '$want_exe' is not under '$base'" >> "$LOG"
+    fi
 fi
-[ -z "$exe" ] && [ -n "$base" ] && exe="$(findexe "$base")"
+if [ -z "$exe" ] && [ -n "$base" ]; then
+    exe="$(findexe "$base")"; [ -n "$exe" ] && src=findexe
+fi
 
 # fall back to whatever neutron downloaded itself
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
-    [ -f "$N/games/.map/$appid" ] && exe="$(head -1 "$N/games/.map/$appid")"
+    if [ -f "$N/games/.map/$appid" ]; then
+        exe="$(head -1 "$N/games/.map/$appid")"; src=map
+    fi
 fi
 
 if [ -z "$exe" ] || [ ! -f "$exe" ]; then
@@ -96,5 +110,5 @@ if [ -z "$exe" ] || [ ! -f "$exe" ]; then
     exit 1
 fi
 
-echo "launching $exe  backend=${MNC_GAME_BACKEND:-default}" >> "$LOG"
+echo "launching $exe  backend=${MNC_GAME_BACKEND:-default}  exe from ${src:-?}" >> "$LOG"
 NEUTRON_APPID="$appid" exec "$N/bin/neutron-run" "$exe" "${game_args[@]+"${game_args[@]}"}" >> "$LOG" 2>&1

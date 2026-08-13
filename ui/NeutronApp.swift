@@ -157,6 +157,43 @@ final class Installer: ObservableObject {
         }
     }
 
+    // the installer refuses to uninstall while steam is open, because steam
+    // rewrites the very files we are restoring when it quits.
+    func uninstall() {
+        let a = NSAlert()
+        a.messageText = "Uninstall Neutron?"
+        a.informativeText = "Your Windows games lose their Install and Play buttons in Steam. Your Mac games and anything Steam downloaded are left alone. Steam will be closed."
+        a.alertStyle = .warning
+        a.addButton(withTitle: "Uninstall")
+        a.addButton(withTitle: "Uninstall and Delete Saved Data")
+        a.addButton(withTitle: "Cancel")
+        let choice = a.runModal()
+        if choice == .alertThirdButtonReturn { return }
+        let purge = (choice == .alertSecondButtonReturn)
+
+        step = .working
+        log = []
+        DispatchQueue.global().async {
+            if self.steamRunning {
+                self.append("Closing Steam...")
+                self.run("/usr/bin/osascript", ["-e", "tell application \"Steam\" to quit"])
+                for _ in 0..<40 {
+                    if self.run("/usr/bin/pgrep", ["-x", "steam_osx"]).isEmpty { break }
+                    Thread.sleep(forTimeInterval: 1)
+                }
+            }
+            var args = [self.script, "uninstall"]
+            if purge { args.append("--purge") }
+            self.stream("/bin/bash", args)
+            DispatchQueue.main.async {
+                self.step = self.isInstalled
+                    ? .failed("Uninstall did not finish, see the log.")
+                    : .notInstalled
+                self.refresh()
+            }
+        }
+    }
+
     // the engine travels with the app as a zip. tell the installer where it is.
     private var childEnv: [String: String] {
         var e = ProcessInfo.processInfo.environment
@@ -355,6 +392,10 @@ struct ContentView: View {
 
             Divider()
             HStack {
+                // destructive, so it sits away from the buttons people mean to press
+                if m.step != .working && m.isInstalled {
+                    Button("Uninstall") { m.uninstall() }.controlSize(.small)
+                }
                 if case .failed(let why) = m.step {
                     Text(why).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
                 }

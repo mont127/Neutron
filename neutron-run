@@ -23,6 +23,22 @@ if [ -z "${MNC_GAME_BACKEND:-}" ] && [ -f "$NEUTRON_HOME/defaults" ]; then
     . "$NEUTRON_HOME/defaults"
 fi
 
+# steam reports nothing when a launch fails, so leave a trail: one line per
+# launch and one for every reason a session ends.
+NEUTRON_LOG="$HOME/Library/Logs/neutron-launch.log"
+mkdir -p "$HOME/Library/Logs" 2>/dev/null || true
+if [ -f "$NEUTRON_LOG" ]; then
+    _sz="$(stat -f %z "$NEUTRON_LOG" 2>/dev/null || echo 0)"
+    if [ "${_sz:-0}" -gt 262144 ]; then
+        tail -c 65536 "$NEUTRON_LOG" > "$NEUTRON_LOG.trim" 2>/dev/null \
+            && mv -f "$NEUTRON_LOG.trim" "$NEUTRON_LOG" 2>/dev/null || true
+    fi
+    unset _sz
+fi
+say() {
+    printf '%s [%s] %s\n' "$(date '+%F %T')" "$$" "$*" >> "$NEUTRON_LOG" 2>/dev/null || true
+}
+
 wine_dir="${NEUTRON_WINE:-}"
 if [ -z "$wine_dir" ]; then
     for d in "$HOME/Library/Application Support/Neutron/wine-unified" \
@@ -214,27 +230,138 @@ run() {
     arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$@"' bash "$@"
 }
 
-# steam's Stop button signals the process it launched, which is this script. the
-# game is several levels below (arch -> bash -> wine -> exe), so killing us alone
-# leaves it running. take the whole tree down with us.
-kill_tree() {
+STEAM_LOG="$HOME/Library/Application Support/Steam/logs/console_log.txt"
+run_dir="$NEUTRON_HOME/run"
+mkdir -p "$run_dir" 2>/dev/null || true
+
+tree_pids() {
     local p="$1" c
-    for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c"; done
-    kill -TERM "$p" 2>/dev/null || true
+    for c in $(pgrep -P "$p" 2>/dev/null); do tree_pids "$c"; done
+    echo "$p"
+}
+
+# the game sits three levels down (arch -> bash -> wine -> exe) and games under
+# wine routinely ignore TERM, so signal the whole tree and then insist
+stop_tree() {
+    local p="$1" i n=0
+    if ! kill -0 "$p" 2>/dev/null; then return 0; fi
+    for i in $(tree_pids "$p"); do kill -TERM "$i" 2>/dev/null || true; done
+    while [ "$n" -lt 20 ]; do
+        if ! kill -0 "$p" 2>/dev/null; then return 0; fi
+        sleep 0.25
+        n=$((n + 1))
+    done
+    for i in $(tree_pids "$p"); do kill -KILL "$i" 2>/dev/null || true; done
+    return 0
+}
+
+# one bridge stub per prefix, and steam_stub.c loops forever, so it is found
+# rather than started when it is already up. the match is a literal substring:
+# pgrep -f reads the install path as a regex, and a home directory containing
+# a + or a bracket then reports "not running" and starts a second stub.
+stub_running() {
+    local line
+    while IFS= read -r line; do
+        case "$line" in *"$stub"*) return 0 ;; esac
+    done < <(ps -axo command= 2>/dev/null)
+    return 1
 }
 
 game_pid=""
-stubpid=""
+guard_pid=""
+appclaim=""
+_cleaned=0
+# the old version ended on a && that returned non-zero when there was no stub,
+# so under errexit the handler died there and the exit never ran
 cleanup() {
-    [ -n "$game_pid" ] && kill_tree "$game_pid"
-    [ -n "$stubpid" ] && kill_tree "$stubpid"
+    if [ "$_cleaned" = 1 ]; then return 0; fi
+    _cleaned=1
+    if [ -n "$game_pid" ]; then stop_tree "$game_pid"; fi
+    if [ -n "$guard_pid" ]; then kill -TERM "$guard_pid" 2>/dev/null || true; fi
+    if [ -n "$appclaim" ] && [ "$(head -1 "$appclaim" 2>/dev/null || true)" = "$$" ]; then
+        rm -f "$appclaim" 2>/dev/null || true
+    fi
+    return 0
 }
-trap 'cleanup; exit 143' TERM INT HUP
+trap 'say "signalled, stopping the game"; cleanup; exit 143' TERM INT HUP
 trap cleanup EXIT
 
-if ! pgrep -f "$stub" >/dev/null 2>&1; then
-    run "$wine" "$stub" >/dev/null 2>&1 &
-    stubpid=$!
+# steam never signals this script. on the test machine the launcher outlived both
+# the Stop click and steam's own shutdown with no TERM, no KILL and no trap
+# firing, and ps showed why steam cannot use the obvious route: it puts the game
+# in its own process group, so a group kill would take steam with it. what steam
+# does do is print one line the moment it stops counting a process, naming the
+# pid it spawned. neutron-launch execs us, so that pid is $$.
+guard() {
+    # detached from the traps above: this runs on after we are gone, and its own
+    # exit must never be what tears the game down
+    trap - TERM INT HUP EXIT
+    local me="$1" game="$2" from=1 hits
+    if [ -f "$STEAM_LOG" ]; then
+        from="$(stat -f %z "$STEAM_LOG" 2>/dev/null || echo 0)"
+        from=$((from + 1))
+    fi
+    while :; do
+        sleep 2
+        # the game ending first is the normal case, and a title that hands off to
+        # another process must not be killed for it
+        if ! kill -0 "$game" 2>/dev/null; then return 0; fi
+        if ! kill -0 "$me" 2>/dev/null; then
+            say "launcher was killed outright, taking the game with it"
+            stop_tree "$game"
+            return 0
+        fi
+        if [ -f "$STEAM_LOG" ]; then
+            # our own ProcID only. steam prints this line for every process a
+            # game registers, so acting on a helper or updater exiting would
+            # kill the game underneath it. grep -c rather than grep -q: -q exits
+            # early, tail takes SIGPIPE and pipefail then reports 141 for a
+            # pipeline that actually matched.
+            hits="$(tail -c "+$from" "$STEAM_LOG" 2>/dev/null \
+                | grep -cE "Game process removed.*ProcID $me( |$)" || true)"
+            # if steam itself is gone it did not stop us, it quit, and quitting
+            # steam has never meant killing a running game
+            if [ "${hits:-0}" -gt 0 ] && pgrep -x steam_osx >/dev/null 2>&1; then
+                say "steam stopped counting us, stopping the game"
+                stop_tree "$game"
+                return 0
+            fi
+        fi
+    done
+}
+
+# a Stop that never landed leaves the previous tree orphaned and still burning
+# cpu, and steam then starts a second copy on the next Play with no complaint.
+# if steam is launching this appid again then an earlier session for the same
+# appid is stale by definition. scoped to this appid, so another game running
+# under neutron is never touched.
+if [ -n "$appid" ]; then
+    appclaim="$run_dir/app.$appid"
+    _old="$(head -1 "$appclaim" 2>/dev/null || true)"
+    case "${_old:-}" in
+        ''|*[!0-9]*|"$$") ;;
+        *)
+            _oldcmd="$(ps -o command= -p "$_old" 2>/dev/null || true)"
+            case "$_oldcmd" in
+                *neutron-run*)
+                    say "previous session for appid $appid still up (pid $_old), stopping it"
+                    stop_tree "$_old"
+                    ;;
+            esac
+            unset _oldcmd
+            ;;
+    esac
+    unset _old
+    echo "$$" > "$appclaim" 2>/dev/null || appclaim=""
+fi
+
+# started detached so it belongs to no launcher. it used to be a child, and the
+# EXIT trap of whichever game happened to start it killed the shared bridge out
+# from under any other game still running, which then sat at 0% cpu talking to
+# nothing.
+if ! stub_running; then
+    say "starting the steam bridge stub"
+    ( run "$wine" "$stub" >/dev/null 2>&1 & )
     sleep 4
 fi
 
@@ -242,6 +369,18 @@ fi
 # gate is getenv() != NULL, so unset it rather than exporting a 0.
 if [ "$hack22_off" = 1 ]; then export MNC_HACK22_OFF=1; else unset MNC_HACK22_OFF; fi
 
+say "launch pid=$$ ppid=$PPID pgid=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ') backend=$MNC_GAME_BACKEND exe=$exe"
+
 run "$wine" "$exe" "$@" &
 game_pid=$!
+guard "$$" "$game_pid" &
+guard_pid=$!
+
+# errexit would skip the teardown and swallow the reason the game stopped
+set +e
 wait "$game_pid"
+rc=$?
+set -e
+say "game exited rc=$rc"
+cleanup
+exit "$rc"

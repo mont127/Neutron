@@ -628,18 +628,35 @@ APPINFO="$STEAM/appcache/appinfo.vdf"
 # steam resolves a launch entry relative to the library the game landed in, so
 # the shim goes in all of them
 install_runtime() {
-    local lib n=0
+    local lib dst
     { echo "$STEAM"; sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
         "$STEAM/steamapps/libraryfolders.vdf" 2>/dev/null; } | sort -u | while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        # an unplugged external library is still listed in libraryfolders.vdf.
+        # skipping it silently is how a game ends up with no shim at all, which
+        # steam reports as "missing game executable" and nothing explains
+        if [ ! -d "$lib" ]; then
+            echo "  library not reachable, games on it will not launch: $lib" >&2
+            continue
+        fi
         # do NOT require steamapps/common to exist: a steam that has never
         # downloaded a game has no such dir, the runtime would be skipped, and
         # the first game installed would fail with "missing game executable"
-        [ -d "$lib/steamapps" ] || continue
-        mkdir -p "$lib/steamapps/common/Neutron Runtime"
-        cp "$SELF_DIR/src/neutron-launch" "$lib/steamapps/common/Neutron Runtime/neutron-launch"
-        chmod +x "$lib/steamapps/common/Neutron Runtime/neutron-launch"
-        echo "  runtime -> $lib"
-    done
+        dst="$lib/steamapps/common/Neutron Runtime"
+        if mkdir -p "$dst" 2>/dev/null \
+           && cp "$SELF_DIR/src/neutron-launch" "$dst/.neutron-launch.new" 2>/dev/null \
+           && chmod +x "$dst/.neutron-launch.new" 2>/dev/null \
+           && mv -f "$dst/.neutron-launch.new" "$dst/neutron-launch" 2>/dev/null; then
+            echo "  runtime -> $lib"
+        else
+            rm -f "$dst/.neutron-launch.new" 2>/dev/null || true
+            echo "  cannot write the runtime into $lib" >&2
+        fi
+    done || true
+    # one unwritable library must not abort the whole apply: under errexit an
+    # unguarded cp in here used to kill neutron outright, with no message, and
+    # every library after it went without a shim
+    return 0
 }
 
 # tell steam a windows-only game also has a macOS build, which is our shim.
@@ -722,12 +739,17 @@ cmd_sync() {
         overlay_present "$id" || missing+=("$id")
     done < <(classify)
 
+    # before the early exit, not after: the overlay can be perfectly intact while
+    # the per-library shim is gone (a library that was unplugged at install time,
+    # or a steam that has since added one), and sync is the only thing that ever
+    # runs again on its own
+    install_runtime >/dev/null
+
     if [ "${#missing[@]}" -eq 0 ]; then
         [ "$quiet" = 1 ] || echo "everything is already enabled."
         exit 0
     fi
 
-    install_runtime >/dev/null
     local n=0
     for id in "${missing[@]}"; do
         PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" enable "$APPINFO" "$id" >/dev/null 2>&1 \
@@ -1235,6 +1257,31 @@ cmd_uninstall() {
         python3 "$SELF_DIR/src/shortcuts.py" clean "$cfg/shortcuts.vdf" 2>/dev/null || true
     done < <(configdirs)
     note "removed neutron shortcuts"
+
+    # put each game's appinfo entry back. without this a windows-only game still
+    # advertises a macOS build after uninstalling, so steam keeps showing Play
+    # and running it lands on a shim that is no longer there
+    if [ -f "$APPINFO" ] && [ -f "$NEUTRON_HOME/backup/appinfo.orig.vdf" ]; then
+        local id verdict action inst name reverted=0
+        while IFS='|' read -r id verdict action inst name; do
+            [ "$action" = "neutron" ] || continue
+            overlay_present "$id" || continue
+            if PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" revert \
+                 "$APPINFO" "$id" "$NEUTRON_HOME/backup/appinfo.orig.vdf" >/dev/null 2>&1; then
+                reverted=$((reverted + 1))
+            fi
+        done < <(classify)
+        note "reverted $reverted game(s) in steam's app cache"
+    fi
+
+    local lib
+    { echo "$STEAM"; sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
+        "$STEAM/steamapps/libraryfolders.vdf" 2>/dev/null; } | sort -u | while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        rm -rf "$lib/steamapps/common/Neutron Runtime" 2>/dev/null || true
+    done || true
+    note "removed the launch shims"
+
     local wine
     wine="$(. "$CONFIG" 2>/dev/null; echo "${NEUTRON_WINE:-}")"
     if [ -n "$wine" ]; then
@@ -1243,9 +1290,16 @@ cmd_uninstall() {
             *) rm -rf "$wine/dlls/lsteamclient"; note "unstaged bridge from $wine" ;;
         esac
     fi
-    rm -rf "$BIN" "$CONFIG"
+    # the config is the only record of where the engine went, so an install that
+    # never finished writing it would otherwise strand several gigabytes
+    if [ -d "$NEUTRON_HOME/wine-unified" ]; then
+        rm -rf "$NEUTRON_HOME/wine-unified"
+        note "removed the engine"
+    fi
+    rm -rf "$BIN" "$CONFIG" "$NEUTRON_HOME/steam-backup" "$NEUTRON_HOME/backup" \
+           "$NEUTRON_HOME/run" "$NEUTRON_HOME/vulkan" "$NEUTRON_HOME/version" \
+           "$NEUTRON_HOME/defaults" "$NEUTRON_HOME/.no-d3dmetal"
     [ "$purge" = 1 ] && rm -rf "$NEUTRON_HOME/prefix"
-    rm -rf "$NEUTRON_HOME/steam-backup"
     echo "uninstalled${purge:+ (prefix purged)}"
 }
 
