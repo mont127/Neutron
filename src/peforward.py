@@ -132,6 +132,8 @@ SECT_ALIGN = 0x1000
 FILE_ALIGN = 0x200
 TEXT_RVA = 0x1000
 EDATA_RVA = 0x2000
+# the arena the bridge bump-allocates its interface objects into
+DATA_SIZE = 0x100000
 
 # DllMain: return TRUE and touch nothing. the loader will not call an entry point
 # of 0, so this could be left out entirely, but a module with no code at all is
@@ -194,9 +196,18 @@ def _image(machine, edata):
     reloc = struct.pack("<IIHH", TEXT_RVA, 12, 0, 0)
     reloc_rva = EDATA_RVA + _align(len(edata), SECT_ALIGN)
 
+    # the bridge's get_mem_from_steamclient_dll looks up whichever module is
+    # called steamclient.dll, hunts its section table for a .data and
+    # bump-allocates its interface objects there. with no .data it prints
+    # ".data section not found." and gives up, which is what killed re4. a
+    # forwarder is the right home for that arena precisely because it has no
+    # globals of its own to be written over, unlike the bridge.
+    data_rva = reloc_rva + _align(len(reloc), SECT_ALIGN)
+    data = b"\0" * DATA_SIZE
     secs = [(b".text", TEXT_RVA, text, 0x60000020),
             (b".edata", EDATA_RVA, edata, 0x40000040),
-            (b".reloc", reloc_rva, reloc, 0x42000040)]
+            (b".reloc", reloc_rva, reloc, 0x42000040),
+            (b".data", data_rva, data, 0xC0000040)]
     hdrs = _align(0x80 + 24 + (240 if plus else 224) + len(secs) * 40,
                   FILE_ALIGN)
 
@@ -221,7 +232,7 @@ def _image(machine, edata):
     struct.pack_into("<II", out, opt + 32, SECT_ALIGN, FILE_ALIGN)
     struct.pack_into("<HHHHHHI", out, opt + 40, 6, 0, 0, 0, 6, 0, 0)
     struct.pack_into("<III", out, opt + 56,
-                     reloc_rva + _align(len(reloc), SECT_ALIGN), hdrs, 0)
+                     data_rva + _align(len(data), SECT_ALIGN), hdrs, 0)
     struct.pack_into("<HH", out, opt + 68, 3, 0x0140)  # cui, dynamic base + nx
     if plus:
         struct.pack_into("<QQQQII", out, opt + 72, 0x100000, 0x1000,
@@ -299,13 +310,16 @@ def check(bridge, fwd, target):
     nt = f.name_table()
     if nt != sorted(nt, key=lambda n: n.encode("latin1")):
         bad.append("export names are not in ascii order")
-    # the invariant the whole design rests on. the bridge hunts the section
-    # table of whatever module is called steamclient.dll for a .data to
-    # allocate into; a forwarder that grew one would be written over.
-    data = [s[0] for s in f.sections if s[0].startswith(".data")]
-    if data:
-        bad.append("has a %s section, the bridge would allocate into it"
-                   % data[0])
+    # the invariant the whole design rests on, and it is the opposite of what
+    # it looks like: the bridge REQUIRES a .data in whatever module is called
+    # steamclient.dll, and refuses to initialise without one. it is safe here
+    # only because a forwarder keeps nothing in it.
+    data = [s for s in f.sections if s[0].startswith(".data")]
+    if not data:
+        bad.append("has no .data, the bridge cannot allocate and refuses to init")
+    elif data[0][2] < DATA_SIZE:
+        bad.append("its .data is %d bytes, too small to allocate into"
+                   % data[0][2])
     return bad
 
 
