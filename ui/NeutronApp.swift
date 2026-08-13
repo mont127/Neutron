@@ -13,7 +13,8 @@ final class Installer: ObservableObject {
     @Published var log: [String] = []
     @Published var windowsGames = 0
     @Published var enabledGames = 0
-    @Published var version = ""
+    @Published var version = ""       // what is installed and actually runs games
+    @Published var appVersion = ""    // what this copy of the app carries
     @Published var updateTo = ""      // non-empty when a newer release exists
     @Published var d3dmetalReady = false
     @Published var d3dmetalDismissed = false
@@ -64,6 +65,19 @@ final class Installer: ObservableObject {
         FileManager.default.fileExists(atPath: neutronHome + "/config")
     }
 
+    // "0.9" is older than "0.10", so compare the numbers rather than the strings
+    static func newer(_ a: String, than b: String) -> Bool {
+        if a.isEmpty { return false }
+        if b.isEmpty { return true }
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }
+        let y = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
     func refresh() {
         steamRunning = !run("/usr/bin/pgrep", ["-x", "steam_osx"]).isEmpty
         let scan = run("/bin/bash", [script, "scan-machine"])
@@ -75,9 +89,16 @@ final class Installer: ObservableObject {
         windowsGames = win
         version = (try? String(contentsOfFile: neutronHome + "/version", encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        appVersion = (try? String(contentsOfFile:
+                Bundle.main.bundlePath + "/Contents/Resources/installer/VERSION", encoding: .utf8))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let latest = run("/bin/bash", [script, "update", "--check"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        updateTo = (latest.isEmpty || latest == version) ? "" : latest
+        // only ever offer to go forwards. comparing against the installed
+        // version alone made a v1.0 app offer an "update" to the v0.9 release,
+        // because the installed copy was older than both.
+        let floorVersion = Installer.newer(appVersion, than: version) ? appVersion : version
+        updateTo = (!latest.isEmpty && Installer.newer(latest, than: floorVersion)) ? latest : ""
         d3dmetalReady = FileManager.default.fileExists(
             atPath: neutronHome + "/wine-unified/mnc-d3d/libd3dshared.dylib")
         d3dmetalDismissed = FileManager.default.fileExists(
@@ -318,6 +339,13 @@ struct ContentView: View {
                             Button("Update to v\(m.updateTo)") { m.update() }
                                 .controlSize(.small)
                         }
+                    }
+                    // the number above is what is installed and runs games, which
+                    // is not the same as the app you just opened
+                    if Installer.newer(m.appVersion, than: m.version) {
+                        Text("This app is v\(m.appVersion). Click Re-apply to install it.")
+                            .font(.system(size: 11)).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     if !m.d3dmetalReady && !m.d3dmetalDismissed {

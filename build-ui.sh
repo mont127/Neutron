@@ -67,7 +67,11 @@ if [ -n "$WINE_ZIP" ]; then
     echo "  engine sha256 $(cut -c1-16 < "$APP/Contents/Resources/installer/ENGINE.sha256")..."
 fi
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+# stamp the real version, so Finder's Get Info and the about box agree with the
+# VERSION we just shipped rather than a number frozen at 1.0
+VER="$(tr -d ' \n' < "$SELF/VERSION" 2>/dev/null || true)"
+[ -n "$VER" ] || VER="0"
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -75,8 +79,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>Neutron</string>
     <key>CFBundleDisplayName</key><string>Neutron</string>
     <key>CFBundleIdentifier</key><string>com.mont127.neutron</string>
-    <key>CFBundleVersion</key><string>1.0</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>$VER</string>
+    <key>CFBundleShortVersionString</key><string>$VER</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>Neutron</string>
     <key>CFBundleIconFile</key><string>Neutron</string>
