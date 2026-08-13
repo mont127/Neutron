@@ -39,6 +39,17 @@ for d in nls fonts; do
     fi
 done
 
+# freetype, fontconfig, moltenvk and sdl travel with the engine too: without
+# them a clean mac has no font rendering at all ("wine cannot find the freetype
+# font library"), because the old dyld path pointed at macndcheese's deps and
+# intel homebrew, neither of which a new machine has
+for d in mnc-fonts mnc-tls mnc-vulkan mnc-sdl; do
+    if [ -d "$(dirname "$SRC")/$d" ] && [ ! -d "$STAGE/$d" ]; then
+        cp -R "$(dirname "$SRC")/$d" "$STAGE/$d"
+        echo "  bundled $d ($(du -sh "$STAGE/$d" | cut -f1))"
+    fi
+done
+
 # the graphics pack has to travel with it or no game renders
 [ -d "$SRC/mnc-d3d" ] && echo "  mnc-d3d included ($(du -sh "$SRC/mnc-d3d" | cut -f1))"
 

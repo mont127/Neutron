@@ -631,7 +631,10 @@ install_runtime() {
     local lib n=0
     { echo "$STEAM"; sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
         "$STEAM/steamapps/libraryfolders.vdf" 2>/dev/null; } | sort -u | while IFS= read -r lib; do
-        [ -d "$lib/steamapps/common" ] || continue
+        # do NOT require steamapps/common to exist: a steam that has never
+        # downloaded a game has no such dir, the runtime would be skipped, and
+        # the first game installed would fail with "missing game executable"
+        [ -d "$lib/steamapps" ] || continue
         mkdir -p "$lib/steamapps/common/Neutron Runtime"
         cp "$SELF_DIR/src/neutron-launch" "$lib/steamapps/common/Neutron Runtime/neutron-launch"
         chmod +x "$lib/steamapps/common/Neutron Runtime/neutron-launch"

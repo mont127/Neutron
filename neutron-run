@@ -100,7 +100,13 @@ export WINEESYNC=0
 # /usr/local/lib here, DXVK throws and DXMT renders a black screen.
 _deps="$(dirname "$wine_dir")"
 if [ -z "${MNC_DYLD:-}" ]; then
+    # the engine carries its own freetype/fontconfig/moltenvk/sdl, because a mac
+    # with neither macndcheese nor x86_64 homebrew has none of them and wine then
+    # cannot find freetype, so no text renders at all
     MNC_DYLD="$wine_dir/mnc-d3d"
+    for d in mnc-fonts mnc-tls mnc-vulkan mnc-sdl; do
+        [ -d "$wine_dir/$d" ] && MNC_DYLD="$MNC_DYLD:$wine_dir/$d"
+    done
     for d in \
         /usr/local/opt/gstreamer/lib /usr/local/lib /usr/local/opt/freetype/lib \
         /usr/local/opt/fontconfig/lib /usr/local/opt/gnutls/lib \
