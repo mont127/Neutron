@@ -15,6 +15,7 @@ final class Installer: ObservableObject {
     @Published var enabledGames = 0
     @Published var version = ""
     @Published var updateTo = ""      // non-empty when a newer release exists
+    @Published var d3dmetalReady = false
     @Published var steamRunning = false
 
     let home = NSHomeDirectory()
@@ -76,6 +77,8 @@ final class Installer: ObservableObject {
         let latest = run("/bin/bash", [script, "update", "--check"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         updateTo = (latest.isEmpty || latest == version) ? "" : latest
+        d3dmetalReady = FileManager.default.fileExists(
+            atPath: neutronHome + "/wine-unified/mnc-d3d/libd3dshared.dylib")
         loadDefaults()
         if step == .checking { step = isInstalled ? .done : .notInstalled }
     }
@@ -110,6 +113,25 @@ final class Installer: ObservableObject {
         DispatchQueue.main.async {
             self.log.append(s)
             if self.log.count > 300 { self.log.removeFirst() }
+        }
+    }
+
+    // D3DMetal cannot be redistributed, so the user points us at apple's toolkit
+    // and the installer lifts the framework and dlls out of it into the engine.
+    func chooseToolkit() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose the Game Porting Toolkit"
+        panel.message = "Select Evaluation_environment_for_Windows_games_*.dmg"
+        panel.allowedFileTypes = ["dmg"]
+        panel.allowsOtherFileTypes = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        step = .working
+        log = []
+        DispatchQueue.global().async {
+            self.stream("/bin/bash", [self.script, "d3dmetal", url.path])
+            DispatchQueue.main.async { self.step = .done; self.refresh() }
         }
     }
 
@@ -247,6 +269,23 @@ struct ContentView: View {
                             Button("Update to v\(m.updateTo)") { m.update() }
                                 .controlSize(.small)
                         }
+                    }
+
+                    if !m.d3dmetalReady {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange).font(.system(size: 12))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("D3DMetal is not installed")
+                                    .font(.system(size: 12, weight: .medium))
+                                Text("It is Apple's and cannot be bundled. Download the Game Porting Toolkit and point Neutron at it. DXVK and DXMT work without it.")
+                                    .font(.system(size: 11)).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Choose toolkit .dmg...") { m.chooseToolkit() }
+                                    .controlSize(.small)
+                            }
+                        }
+                        Divider().padding(.vertical, 4)
                     }
 
                     Text("Settings").font(.system(size: 12, weight: .semibold))
