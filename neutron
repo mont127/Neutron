@@ -81,10 +81,37 @@ resolve_wine() {
                 cp -R "$DEPLOYED_WINE/mnc-d3d/$f" "$keep/" 2>/dev/null || true
             done
         fi
+        # check the download before spending minutes on it. a .dmg that arrived
+        # truncated fails here with a raw CRC dump from unzip, which reads like a
+        # bug in neutron rather than a damaged file.
+        if [ -f "$SELF_DIR/ENGINE.sha256" ]; then
+            local want have
+            want="$(cut -d' ' -f1 < "$SELF_DIR/ENGINE.sha256" 2>/dev/null || true)"
+            have="$(shasum -a 256 "$NEUTRON_WINE_ZIP" 2>/dev/null | cut -d' ' -f1)"
+            if [ -n "$want" ] && [ "$want" != "$have" ]; then
+                if [ -n "$keep" ]; then rm -rf "$keep"; fi
+                echo "  this copy of Neutron is damaged: the engine inside it does not" >&2
+                echo "  match what was published. download the .dmg again from" >&2
+                echo "  github.com/mont127/Neutron/releases" >&2
+                echo "  (expected $want, got ${have:-nothing})" >&2
+                return 1
+            fi
+        fi
         echo "  unpacking the wine engine (a few minutes, once)" >&2
         rm -rf "$DEPLOYED_WINE"; mkdir -p "$DEPLOYED_WINE"
+        local unpacked=0 missing=""
         if ditto -x -k "$NEUTRON_WINE_ZIP" "$DEPLOYED_WINE" 2>/dev/null \
            || unzip -q "$NEUTRON_WINE_ZIP" -d "$DEPLOYED_WINE"; then
+            unpacked=1
+            # both tools can report success after extracting only part of a
+            # damaged archive, so do not take their word for it
+            for f in loader/wine wine server/wineserver mnc-d3d \
+                     dlls/lsteamclient/lsteamclient.so; do
+                [ -e "$DEPLOYED_WINE/$f" ] || missing="$missing $f"
+            done
+            [ -z "$missing" ] || unpacked=0
+        fi
+        if [ "$unpacked" = 1 ]; then
             chmod +x "$DEPLOYED_WINE/loader/wine" "$DEPLOYED_WINE/wine" \
                      "$DEPLOYED_WINE/server/wineserver" 2>/dev/null || true
             # written here, not just in install: d3dmetal and apply both resolve
@@ -99,13 +126,27 @@ resolve_wine() {
                 echo "  kept your D3DMetal files" >&2
             fi
         else
-            echo "  could not unpack $NEUTRON_WINE_ZIP" >&2
+            # do NOT fall through to another wine here. the deps tree belongs to
+            # macncheese and has no lsteamclient, so carrying on produced
+            # "no lsteamclient in the wine (was it built with the bridge?)",
+            # which points at the wrong thing entirely.
+            [ -z "$missing" ] || echo "  the engine unpacked incomplete, missing:$missing" >&2
+            echo "  could not unpack the engine, so nothing was installed." >&2
+            echo "  the download is most likely damaged: fetch the .dmg again from" >&2
+            echo "  github.com/mont127/Neutron/releases" >&2
             rm -rf "$DEPLOYED_WINE"
+            if [ -n "$keep" ]; then rm -rf "$keep"; fi
+            return 1
         fi
         if [ -n "$keep" ]; then rm -rf "$keep"; fi
     fi
     for d in "$DEPLOYED_WINE" "$DEPS_WINE" "$DEV_WINE"; do
-        [ -x "$d/loader/wine" ] && { echo "$d"; return; }
+        [ -x "$d/loader/wine" ] || continue
+        # a wine with no bridge cannot run a steam game, and picking one up
+        # silently is how a failed unpack turned into a confusing error later
+        if [ -f "$d/dlls/lsteamclient/lsteamclient.so" ] || [ "$d" = "$DEV_WINE" ]; then
+            echo "$d"; return
+        fi
     done
     return 1
 }
@@ -312,7 +353,7 @@ cmd_d3dmetal() {
     local src="${1:-}" wine pack redist mp="" rc=0
     [ -n "$src" ] || die "usage: neutron d3dmetal <Evaluation_environment_for_Windows_games_*.dmg | redist dir>"
     [ -e "$src" ] || die "no such file: $src"
-    wine="$(resolve_wine)" || die "no unified wine found"
+    wine="$(resolve_wine)" || die "the wine engine is not available, see the lines above"
     pack="$(d3d_pack_dir "$wine")" || die "no mnc-d3d dir in the engine"
 
     if [ "${src##*.}" = "dmg" ]; then
@@ -581,7 +622,7 @@ installed_windows_games() {
 cmd_install() {
     local wine prefix all=0
     [ "${1:-}" = "--all" ] && all=1
-    wine="$(resolve_wine)" || die "no unified wine found (no bundle, deps or build tree)"
+    wine="$(resolve_wine)" || die "the wine engine is not available, see the lines above"
     prefix="$PREFIX_DEFAULT"
     echo "installing neutron (wine: $wine)"
 

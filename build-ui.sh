@@ -59,6 +59,12 @@ if [ -n "$WINE_ZIP" ]; then
     [ -f "$WINE_ZIP" ] || { echo "no such wine bundle: $WINE_ZIP" >&2; exit 1; }
     echo "  adding engine ($(du -h "$WINE_ZIP" | cut -f1)), this takes a minute"
     cp "$WINE_ZIP" "$APP/Contents/Resources/wine-unified-bundle.zip"
+    # the installer checks this before it spends minutes unpacking. a .dmg that
+    # arrived truncated otherwise fails with a raw CRC dump from unzip, which
+    # reads like a bug rather than a damaged download
+    shasum -a 256 "$WINE_ZIP" | cut -d' ' -f1 \
+        > "$APP/Contents/Resources/installer/ENGINE.sha256"
+    echo "  engine sha256 $(cut -c1-16 < "$APP/Contents/Resources/installer/ENGINE.sha256")..."
 fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
