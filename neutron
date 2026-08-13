@@ -810,6 +810,21 @@ APPINFO="$STEAM/appcache/appinfo.vdf"
 
 # steam resolves a launch entry relative to the library the game landed in, so
 # the shim goes in all of them
+# which library actually holds an installed app. steam runs the shim relative to
+# the game, so the runtime has to exist in that library and nowhere else will do
+app_library() {
+    local id="$1" lib
+    { echo "$STEAM"; sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
+        "$STEAM/steamapps/libraryfolders.vdf" 2>/dev/null; } | sort -u | while IFS= read -r lib; do
+        [ -n "$lib" ] || continue
+        [ -f "$lib/steamapps/appmanifest_$id.acf" ] && { echo "$lib"; break; }
+    done
+}
+
+runtime_in() {
+    [ -x "$1/steamapps/common/Neutron Runtime/neutron-launch" ]
+}
+
 install_runtime() {
     local lib dst
     { echo "$STEAM"; sed -n 's/.*"path"[[:space:]]*"\(.*\)".*/\1/p' \
@@ -866,7 +881,7 @@ cmd_enable_all() {
     mkdir -p "$NEUTRON_HOME/backup"
     [ -f "$NEUTRON_HOME/backup/appinfo.orig.vdf" ] || cp "$APPINFO" "$NEUTRON_HOME/backup/appinfo.orig.vdf"
     install_runtime
-    local n=0 back=0 id verdict action inst name
+    local n=0 back=0 stuck=0 id verdict action inst name lib
     while IFS='|' read -r id verdict action inst name; do
         # a game we should never have touched: hand it back. the oslist parser
         # read "windows, macos" as windows-only because of the space, so a game
@@ -880,10 +895,24 @@ cmd_enable_all() {
             continue
         fi
         [ "$action" = "neutron" ] || continue
+        # never hand steam a Play button pointing at a launcher that is not
+        # there. an app installed in a library we could not write to would fail
+        # with "game executable missing" and nothing would explain it
+        if [ "$inst" = 1 ]; then
+            lib="$(app_library "$id")"
+            if [ -n "$lib" ] && ! runtime_in "$lib"; then
+                echo "  no runtime in $lib, leaving $name alone" >&2
+                stuck=$((stuck + 1))
+                continue
+            fi
+        fi
         if PYTHONPATH="$SELF_DIR/src" python3 "$SELF_DIR/src/appoverlay.py" enable "$APPINFO" "$id" >/dev/null 2>&1; then
             n=$((n + 1))
         fi
     done < <(classify)
+    if [ "$stuck" != 0 ]; then
+        echo "$stuck game(s) are on a library neutron cannot write to, so they were left alone."
+    fi
     [ "$back" = 0 ] || echo "put $back game(s) back on their own macOS build."
     echo "enabled $n windows game(s) inside steam."
     echo "start steam: each now has its own Install button, and Play runs it through neutron."
