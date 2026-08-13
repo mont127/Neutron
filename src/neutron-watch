@@ -33,8 +33,9 @@ while :; do
 done &
 
 # check the release on every launch, then hourly. the lookup itself is cached for
-# an hour inside neutron, so this is one github call an hour at most. only the
-# scripts update; the engine is left alone. turn it off with:
+# an hour inside neutron, so this is one github call an hour at most. a release
+# that carries a new engine marker fetches and restages that too. turn it off
+# with:
 #   neutron autoupdate off
 notify() {
     /usr/bin/osascript -e "display notification \"$1\" with title \"Neutron\"" \
@@ -48,7 +49,10 @@ while :; do
             if [ "$(cat "$N/autoupdate" 2>/dev/null || echo 1)" = 1 ]; then
                 # never swap the scripts under a running steam session
                 if ! pgrep -x steam_osx >/dev/null 2>&1; then
-                    if "$N/app/neutron" update >/dev/null 2>&1; then
+                    # kept rather than discarded: an unattended update is the
+                    # one that restages the prefix, and when it cannot stage
+                    # something this file is the only place that says so
+                    if "$N/app/neutron" update >"$N/update.log" 2>&1; then
                         notify "Updated to v$new"
                     fi
                 fi

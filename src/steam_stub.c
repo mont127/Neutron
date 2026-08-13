@@ -6,6 +6,8 @@
 #include <windows.h>
 #include <stdio.h>
 
+#define FWD64 "C:\\Program Files (x86)\\Steam\\bin64\\steamclient.dll"
+
 static void set_str(HKEY k, const char *name, const char *val)
 {
     RegSetValueExA(k, name, 0, REG_SZ, (const BYTE *)val, (DWORD)strlen(val) + 1);
@@ -59,15 +61,22 @@ int main(int argc, char **argv)
         /* proton presents the bridge under steam's own name and path rather than
          * as lsteamclient.dll in system32. keep the same layout: a game (and
          * anything inspecting the process) then sees the module it expects. */
-        /* each key names the build that matches its own word size. pointing the
-         * 64-bit key at steamclient.dll made a 64-bit game able to load BOTH
-         * files, since that path stopped being the 32-bit build, and two live
-         * bridges in one process crashes cs2 on startup. it was done to satisfy
-         * steam_api64 looking the module back up as "steamclient.dll" for
-         * Steam_ReleaseThreadLocalMemory, which a steam DRM game needs; that
-         * wants a forwarder at steamclient64.dll, not a second real bridge. */
+        /* a steam DRM game loads the path named here and then looks the module
+         * back up as the literal "steamclient.dll" to reach
+         * Steam_ReleaseThreadLocalMemory. GetModuleHandle only finds modules
+         * that are already loaded, so the file this names has to itself be
+         * called steamclient.dll, and it has to be the export forwarder rather
+         * than the bridge: the bridge allocates its interface objects into the
+         * .data of whatever module carries that name, so naming the bridge kills
+         * its own globals. bin64 holds the 64-bit forwarder because the 32-bit
+         * build already owns steamclient.dll in the Steam directory.
+         * neutron stages a forwarder only when it could write one that matches
+         * the bridge, so read the disk rather than assume: pointing this at a
+         * file that is not there would take the 64-bit path down with it. */
         set_str(active, "SteamClientDll", "C:\\Program Files (x86)\\Steam\\steamclient.dll");
-        set_str(active, "SteamClientDll64", "C:\\Program Files (x86)\\Steam\\steamclient64.dll");
+        set_str(active, "SteamClientDll64",
+                GetFileAttributesA(FWD64) != INVALID_FILE_ATTRIBUTES
+                    ? FWD64 : "C:\\Program Files (x86)\\Steam\\steamclient64.dll");
         set_str(active, "Universe", "Public");
         RegCloseKey(active);
     }

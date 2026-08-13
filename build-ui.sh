@@ -42,15 +42,17 @@ chmod +x "$APP/Contents/Resources/installer/neutron" \
          "$APP/Contents/Resources/installer/src/neutron-watch" \
          "$APP/Contents/Resources/installer/src/compat-entry" 2>/dev/null || true
 
-# prebuild the steam stub so the target machine needs no compiler
+# prebuild the steam stub so the target machine needs no compiler. nothing else
+# is prebuilt: the drm export forwarders have to match the export table of the
+# bridge in whichever engine ends up on the machine, so the installer writes
+# those itself, out of peforward.py, at the moment it stages the bridge.
 if command -v x86_64-w64-mingw32-gcc >/dev/null; then
-    mkdir -p "$APP/Contents/Resources/installer/prebuilt"
-    x86_64-w64-mingw32-gcc -static -O2 \
-        -o "$APP/Contents/Resources/installer/prebuilt/steam.exe" \
+    PRE="$APP/Contents/Resources/installer/prebuilt"
+    mkdir -p "$PRE"
+    x86_64-w64-mingw32-gcc -static -O2 -o "$PRE/steam.exe" \
         "$SELF/src/steam_stub.c" -ladvapi32
     command -v i686-w64-mingw32-gcc >/dev/null && \
-        i686-w64-mingw32-gcc -static -O2 \
-            -o "$APP/Contents/Resources/installer/prebuilt/steam32.exe" \
+        i686-w64-mingw32-gcc -static -O2 -o "$PRE/steam32.exe" \
             "$SELF/src/steam_stub.c" -ladvapi32
     echo "  prebuilt steam stub"
 fi

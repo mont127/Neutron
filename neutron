@@ -231,10 +231,111 @@ provide_stub() {
     fi
 }
 
+# a live claim file means a game is up right now. same test neutron-run makes
+# before it stops an earlier session for the same appid: the pid in the file, and
+# a process by that pid that is still a neutron-run.
+game_running() {
+    local f pid cmd
+    for f in "$NEUTRON_HOME/run"/app.*; do
+        [ -f "$f" ] || continue
+        pid="$(head -1 "$f" 2>/dev/null || true)"
+        case "${pid:-}" in ''|*[!0-9]*) continue ;; esac
+        cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+        case "$cmd" in *neutron-run*) return 0 ;; esac
+    done
+    return 1
+}
+
+# matched as a literal substring for the same reason neutron-run does it that
+# way: pgrep -f reads the install path as a regex, and a home directory with a +
+# or a bracket in it then matches nothing.
+stub_running() {
+    local cmd
+    while IFS= read -r cmd; do
+        case "$cmd" in *"$BIN/steam.exe"*) return 0 ;; esac
+    done < <(ps -axo command= 2>/dev/null)
+    return 1
+}
+
+# the stub writes the ActiveProcess registry values once at startup and then only
+# sleeps, and neutron-run finds a running one rather than restarting it. one left
+# over from before a restaging keeps naming the layout that was on disk then, so
+# drop it and let the next launch start a fresh one.
+#
+# never while a game is up. ActiveProcess\pid names this process, and neutron-run
+# goes out of its way to keep it alive across launches for that reason: it used
+# to start the stub as a child, and the EXIT trap of whichever game had started
+# it killed the shared bridge out from under every other game still running,
+# which then sat at 0% cpu talking to nothing. taking it down from this side is
+# the same wound. a stale stub costs the drm forwarder its effect until the next
+# time nothing is running; killing one costs somebody their session.
+stop_stub() {
+    local pid cmd
+    if game_running; then
+        note "a game is running, so the steam stub is left alone; the new layout"
+        note "takes effect the next time you start a game with nothing else up"
+        return 0
+    fi
+    while read -r pid cmd; do
+        case "$cmd" in *"$BIN/steam.exe"*) kill "$pid" 2>/dev/null || true ;; esac
+    done < <(ps -axo pid=,command= 2>/dev/null)
+    return 0
+}
+
+# --- the export forwarders ----------------------------------------------------
+# a steamworks-drm game (re4's SteamStub, and the older copy of the steam_api
+# init logic those wrappers carry) loads whatever SteamClientDll64 names and then
+# looks the module back up as the literal name "steamclient.dll" to reach
+# Steam_ReleaseThreadLocalMemory. GetModuleHandle only ever finds an already
+# loaded module and never touches the disk, so the file the registry names has to
+# itself be called steamclient.dll or that lookup returns null and the game stops
+# at "Application load error 3:0000065432".
+#
+# the real bridge cannot take that name. it looks for a module called
+# steamclient.dll, walks its section table for a .data and bump-allocates its
+# interface objects into it; when the bridge is that module it writes 0x150 bytes
+# over its own globals, destroys a critical section and faults in ntdll. so the
+# name goes to a forwarder with no code and no .data, and the bridge falls back
+# to the heap exactly as it does today.
+#
+# every forwarder points at lsteamclient, the one real bridge in system32 (and
+# syswow64), so however many of these a process loads there is still a single
+# live bridge in it. two live bridges is what crashes cs2 before it draws.
+
+# generated here, from the bridge sitting in the engine, every time the bridge is
+# staged. it was prebuilt into the .app at first, and that was wrong: prebuilt/
+# is a build product that reaches no other copy of this script, so the update
+# path -- which runs out of $NEUTRON_HOME/app, whose contents come from a source
+# tarball -- had nothing to stage and quietly dropped the forwarder on exactly
+# the runs that needed a fresh one. peforward.py writes the pe itself rather than
+# driving a cross compiler, for the same reason: the machine that needs a
+# forwarder regenerated is a user's, and there is no mingw on it.
+provide_forwarder() {
+    local bridge="$1" out="$2"
+    command -v python3 >/dev/null || return 1
+    [ -f "$bridge" ] || return 1
+    # peforward.py checks what it wrote against the bridge before it puts it at
+    # this path, and leaves nothing behind if it does not like the result. only
+    # stdout is dropped: what it says on the way out is the whole explanation for
+    # a prefix that came out without its forwarder.
+    python3 "$SELF_DIR/src/peforward.py" gen "$bridge" lsteamclient "$out" \
+        >/dev/null || return 1
+    [ -s "$out" ]
+}
+
 # --- stage the bridge into wine + prefix -------------------------------------
 
 stage_bridge() {
-    local wine="$1" prefix="$2" src dst="$wine/dlls/lsteamclient"
+    local wine="$1" prefix="$2" src dst
+    # dst has to be assigned after that line, not on it: local is a command, so
+    # its arguments are expanded before it runs and "$wine" there reads whatever
+    # the CALLER happens to call wine rather than this parameter. cmd_install got
+    # away with it by using the same name; cmd_update passes its as $w, which is
+    # unset here, so under set -u the restage after an engine update aborted the
+    # whole script at that line -- the "|| true" on the call does not catch an
+    # unbound variable -- taking stage_d3d and the closing notes with it and
+    # leaving a new engine with yesterday's prefix.
+    dst="$wine/dlls/lsteamclient"
     src="$(bridge_src "$wine")" || die "no lsteamclient in the wine (was it built with the bridge?)"
 
     # the bundled wine already carries the bridge; only copy it in when it came
@@ -263,7 +364,9 @@ stage_bridge() {
     # each name gets the build that matches its word size. staging the 64-bit
     # bridge at steamclient.dll let a 64-bit game load that file as well as
     # steamclient64.dll, and two live bridges in one process crashes cs2 before
-    # it draws anything.
+    # it draws anything. these are also the fallback: the forwarders below are
+    # written over them, so a machine that cannot produce one is left with
+    # exactly the layout cs2 runs on today.
     cp "$src/x86_64-windows/lsteamclient.dll" "$sdir/steamclient64.dll"
     [ -f "$src/i386-windows/lsteamclient.dll" ] && \
         cp "$src/i386-windows/lsteamclient.dll" "$sdir/steamclient.dll"
@@ -272,10 +375,54 @@ stage_bridge() {
     # an unguarded cp into a system32 that wineboot never created aborted the
     # whole install here, under errexit, with no message
     mkdir -p "$prefix/drive_c/windows/system32" "$prefix/drive_c/windows/syswow64" 2>/dev/null || true
+    # the single real bridge every forwarder resolves to. a forward target is
+    # looked up by bare name with a null load path, so the directory the
+    # forwarder sits in is never searched and these are what answer.
     cp "$src/x86_64-windows/lsteamclient.dll" "$prefix/drive_c/windows/system32/lsteamclient.dll"
     [ -f "$src/i386-windows/lsteamclient.dll" ] && \
         cp "$src/i386-windows/lsteamclient.dll" "$prefix/drive_c/windows/syswow64/lsteamclient.dll"
-    note "staged bridge into prefix"
+
+    # bin64 exists only so a 64-bit file can be called steamclient.dll without
+    # taking the name the 32-bit build needs. this is the path SteamClientDll64
+    # points at, and steam_stub.c falls back to steamclient64.dll when it is not
+    # there, so the registry and the disk cannot disagree.
+    local had64=0 now64=0
+    [ -f "$sdir/bin64/steamclient.dll" ] && had64=1
+    mkdir -p "$sdir/bin64"
+    if provide_forwarder "$src/x86_64-windows/lsteamclient.dll" \
+                         "$sdir/bin64/steamclient.dll"; then
+        now64=1
+        # the same forwarder over the plain name, so anything that loads
+        # steamclient64.dll by its full path gets a stand-in rather than a
+        # second real bridge
+        cp "$sdir/bin64/steamclient.dll" "$sdir/steamclient64.dll"
+        note "staged bridge into prefix, steam-drm forwarders in place"
+    else
+        # nothing is allowed to outlive a failure here: the stub reads this path
+        # to decide what to write into the registry, and a leftover forwarder for
+        # a bridge that has moved on is worse than none. what is left is exactly
+        # the layout cs2 runs on today.
+        rm -rf "$sdir/bin64"
+        note "staged bridge into prefix; no 64-bit forwarder, steam-drm games will not start"
+    fi
+    # the 32-bit side needs the same stand-in for the same reason, and until now
+    # the real 32-bit bridge sat at that name and killed itself on the first
+    # CreateInterface. written as an if rather than a trailing &&: that is the
+    # last command in the function's happy path, so under errexit a machine
+    # without the 32-bit forwarder would abort the whole install here.
+    if [ -f "$src/i386-windows/lsteamclient.dll" ] \
+       && ! provide_forwarder "$src/i386-windows/lsteamclient.dll" \
+                              "$sdir/steamclient.dll"; then
+        note "no 32-bit forwarder, 32-bit steam-drm games will not start"
+    fi
+
+    # last, with the layout whole: the stub reads that 64-bit path once, at its
+    # own startup, and writes what it found into the registry, so a stub still up
+    # from before is naming the other layout now and has to go. only when the
+    # answer actually moved, though -- restaging the same thing twice is the
+    # common case, and stopping the stub is never free.
+    [ "$had64" = "$now64" ] || stop_stub
+    return 0
 }
 
 # --- graphics dlls ------------------------------------------------------------
@@ -641,6 +788,12 @@ cmd_install() {
     # after the original checkout / .app is gone
     mkdir -p "$NEUTRON_HOME/app"
     cp -R "$SELF_DIR/src" "$NEUTRON_HOME/app/"
+    # the compiled stub too. it is the one thing here that cannot be rebuilt from
+    # a source tarball on a machine with no cross compiler, and without it the
+    # deployed copy of this script -- which is the one the updater and the Play
+    # button run -- would reach provide_stub's die() the first time it had to
+    # replace steam.exe. an update never makes this newer, only present.
+    [ -d "$SELF_DIR/prebuilt" ] && cp -R "$SELF_DIR/prebuilt" "$NEUTRON_HOME/app/"
     cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$SELF_DIR/src/neutron-play" \
        "$SELF_DIR/src/neutron-watch" "$NEUTRON_HOME/app/" 2>/dev/null || \
         cp "$SELF_DIR/neutron" "$SELF_DIR/neutron-run" "$NEUTRON_HOME/app/"
@@ -692,9 +845,17 @@ cmd_install() {
     stage_d3d "$wine" "$prefix"
     install_fonts "$prefix"
 
-    # seed the registry once so steam_api can find the client dll before a run
-    WINEPREFIX="$prefix" WINEDEBUG=-all \
-        arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$0" "$1" --once' "$wine/wine" "$BIN/steam.exe" >/dev/null 2>&1 || true
+    # seed the registry once so steam_api can find the client dll before a run.
+    # not while a stub is resident: --once writes ActiveProcess\pid as its own and
+    # then exits, so it would replace a live pid with a dead one and take any
+    # game currently running down with it. a resident stub has already written
+    # the same values anyway.
+    if stub_running; then
+        note "a steam stub is already running, leaving the registry to it"
+    else
+        WINEPREFIX="$prefix" WINEDEBUG=-all \
+            arch -x86_64 /bin/bash -lc 'export DYLD_FALLBACK_LIBRARY_PATH="$MNC_DYLD"; exec "$0" "$1" --once' "$wine/wine" "$BIN/steam.exe" >/dev/null 2>&1 || true
+    fi
 
     cat > "$CONFIG" <<EOF
 NEUTRON_WINE="$wine"
@@ -1461,8 +1622,19 @@ cmd_update() {
             note "restaging the prefix for the new engine"
             MNC_DYLD="$(engine_dyld "$w")"; export MNC_DYLD
             fix_c_drive "$PREFIX_DEFAULT"
-            stage_bridge "$w" "$PREFIX_DEFAULT" >/dev/null 2>&1 || true
-            stage_d3d "$w" "$PREFIX_DEFAULT"    >/dev/null 2>&1 || true
+            # not silenced any more. what these say when they cannot stage
+            # something is the only warning there is, and this runs unattended
+            # from the watcher, so sending it to /dev/null meant a prefix could
+            # come out of an update without its bridge and never mention it.
+            # the trailing "|| true" was not protection either: stage_bridge
+            # reaches die() when the engine has no lsteamclient, and an exit is
+            # not something || can catch. so ask first.
+            if bridge_src "$w" >/dev/null; then
+                stage_bridge "$w" "$PREFIX_DEFAULT" || note "the bridge did not restage"
+            else
+                note "the new engine has no lsteamclient, bridge left as it was"
+            fi
+            stage_d3d "$w" "$PREFIX_DEFAULT" || note "the graphics dlls did not restage"
         fi
     fi
     note "updated to v$tag (previous kept in app.prev)"

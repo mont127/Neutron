@@ -98,8 +98,12 @@ Resources; the installer unpacks it on first run. Nothing here is committed to
 this repo.
 
 The steam stub is prebuilt into the app so the target machine needs no compiler.
-Sign last: anything written into the bundle after `codesign` breaks its seal,
-which is why the installer sets `PYTHONDONTWRITEBYTECODE`.
+The DRM forwarders are not prebuilt: they have to match the export table of the
+bridge in whichever engine the machine ends up with, and `prebuilt/` is a build
+product that never reaches the copy of the installer an update runs, so they are
+written on the target instead (see the bridge, below). Sign last: anything
+written into the bundle after `codesign` breaks its seal, which is why the
+installer sets `PYTHONDONTWRITEBYTECODE`.
 
 ## layout
 
@@ -115,6 +119,7 @@ which is why the installer sets `PYTHONDONTWRITEBYTECODE`.
     src/appoverlay.py     the per-app overlay written through it
     src/adopt.py          makes Steam treat a downloaded game as a real install
     src/steam_stub.c      the stub steam.exe
+    src/peforward.py      reads the bridge's exports, writes the drm forwarder
     src/appinfo.py        reads appinfo.vdf: native-mac vs windows-only
     src/classify.py       per-app verdict + action over the library
     src/gameexe.py        resolves an installed app to its windows exe
@@ -128,9 +133,68 @@ wine 11 path helpers, minimal C++ support in the build). It lives in the wine
 tree, not here, and ships inside the unified wine. Build it with
 `make dlls/lsteamclient/all` in the wine `build64`.
 
+A Steamworks-DRM game needs one more thing. The DRM wrapper loads whatever
+`SteamClientDll64` names, then looks that module back up by the literal name
+`steamclient.dll` to reach `Steam_ReleaseThreadLocalMemory`. `GetModuleHandle`
+only ever finds an already loaded module and never touches the disk, so the file
+the registry names has to itself be called `steamclient.dll`, or the game stops
+at "Application load error 3:0000065432". The bridge cannot take that name: it
+looks for a module called `steamclient.dll` and bump-allocates its interface
+objects into that module's `.data`, so as that module it writes over its own
+globals and faults in ntdll.
+
+So the Steam directory holds pure PE export forwarders under Steam's names, and
+every one of them points at the single real bridge, staged in `system32` and
+`syswow64` as `lsteamclient.dll`. However many of those a process loads there is
+still one live bridge in it, which is the thing that matters: two crashes CS2
+before it draws. A forwarder has no code and no `.data`, so the bridge keeps
+allocating from the heap exactly as it did before.
+
+`src/peforward.py` writes them. It emits the PE itself — a header, an export
+directory of forward strings, and nothing else — rather than driving a cross
+compiler, because the machine that needs one regenerated is a user's: it has no
+mingw and no build tree, and a forwarder that could only be produced where a
+compiler exists would silently stop being staged the first time an engine update
+replaced the bridge. Each one is read back through the same parser and checked
+against the bridge before it is allowed into a prefix — same exports, every one
+of them a forward, `CreateInterface` and `Steam_ReleaseThreadLocalMemory` among
+them, names in ascii order so `GetProcAddress` can binary-search them, and no
+`.data`. If any of that fails, nothing is staged and the plain layout stays, so
+the worst case is the one that worked before forwarders existed.
+
 ## limits
 
 - 64-bit games. The 32-bit side builds but has no wow64 thunks yet.
 - A Windows-only game must be downloaded first, which needs Steam's platform
   briefly set to Windows (see `download` above). Don't let native Mac games
   update while that override is on, or Steam pulls their Windows depots too.
+
+### CS2 matchmaking does not work, and cannot be made to
+
+CS2 runs and plays, but Premier and Competitive do not, and nothing Neutron
+could ship would change that. The refusal is Valve's Game Coordinator returning
+`NotVacVerified`: a session is only flagged VAC-verified once the Steam client
+has run that app's VAC module, and Valve splits those by operating system in
+appinfo, `sourceinit.dat` for Windows and `sourceinit_macos.dat` for macOS.
+Neutron is a macOS Steam client supervising a Windows game process, so it sits
+across that split and neither module applies to it. Three more walls stand
+behind that one: Valve's own `steamclient`, which is where a VAC module has to
+live, is not in the process at all (that module is our bridge); CS2 still uses
+Trusted Mode, and every module in a wine process is unsigned; and macOS Steam
+ships no Windows binaries whatsoever, with no equivalent of Linux Steam's
+`legacycompat/`, which is the only reason the same thing works under Proton.
+CS2 has no macOS build either, and the fallback Valve offers Mac users is a
+frozen legacy CS:GO build with every feature except official matchmaking. Valve
+withheld matchmaking from its own supported Mac path.
+
+What was observed is a refusal rather than a detection: the Game Coordinator
+declines to start the session and says why, in a message the client prints.
+Whether Valve would treat a client in this shape as anything worse is not
+something this document can tell you — no statement of theirs is being cited
+here, and none should be read into it. If your account matters to you, do not
+use Neutron for VAC-secured play. Anything that does not need a VAC-secured
+server is unaffected.
+
+Neutron will not ship anything that defeats, spoofs or evades VAC or any other
+anti-cheat, so this stays as it is unless Valve-signed Windows `steamclient`
+binaries become obtainable through a supported route.
