@@ -27,6 +27,49 @@ static void win_dir_of_self(char *out, DWORD n)
     lstrcpynA(out, path, n);
 }
 
+/* steam is detected by more than a registry pid. proton's steam.exe
+ * (steam_helper/steam.c) creates a vguiPopupWindow titled "Steam" and two named
+ * events, and a game that looks for those rather than the pid concludes steam is
+ * not running: that is what a steamworks-drm title checks before it will start.
+ * this mirrors what proton does, on its own thread, because the window needs a
+ * message loop to answer FindWindow. */
+static DWORD WINAPI steam_windows(void *arg)
+{
+    WNDCLASSEXW cls;
+    MSG msg;
+
+    memset(&cls, 0, sizeof(cls));
+    cls.cbSize = sizeof(cls);
+    cls.lpfnWndProc = DefWindowProcW;
+    cls.lpszClassName = L"vguiPopupWindow";
+    RegisterClassExW(&cls);
+    CreateWindowW(L"vguiPopupWindow", L"Steam", WS_POPUP, 40, 40, 400, 300,
+                  NULL, NULL, NULL, NULL);
+    CreateWindowA("static", "SteamVR Status", WS_POPUP, 0, 0, 0, 0,
+                  NULL, NULL, NULL, NULL);
+
+    while (GetMessageW(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    (void)arg;
+    return 0;
+}
+
+/* the bridge writes Software\Valve\Steam\Apps\<appid> Installed/Running and the
+ * ui language from the live steam client. proton calls this the same way and a
+ * game that asks steam whether its own appid is installed needs it. */
+static void init_registry_from_bridge(void)
+{
+    void (CDECL *init)(void);
+    HMODULE lsc = LoadLibraryW(L"lsteamclient");
+
+    if (!lsc) return;
+    if ((init = (void *)GetProcAddress(lsc, "steamclient_init_registry"))) init();
+    FreeLibrary(lsc);
+}
+
 int main(int argc, char **argv)
 {
     HKEY steam, active;
@@ -43,6 +86,16 @@ int main(int argc, char **argv)
 
     win_dir_of_self(dir, sizeof(dir));
     snprintf(exe, sizeof(exe), "%s\\steam.exe", dir);
+
+    if (stay)
+    {
+        /* named the same as the real client's, because that is what is looked
+         * for. created before the window so a game cannot catch us half set up */
+        CreateEventW(NULL, FALSE, FALSE, L"Steam3Master_SharedMemLock");
+        CreateEventW(NULL, FALSE, FALSE, L"Global\\Valve_SteamIPC_Class");
+        GetDesktopWindow();
+        CreateThread(NULL, 0, steam_windows, NULL, 0, NULL);
+    }
 
     if (RegCreateKeyExA(HKEY_CURRENT_USER, "Software\\Valve\\Steam", 0, NULL, 0,
                         KEY_SET_VALUE, NULL, &steam, NULL) == ERROR_SUCCESS)
@@ -85,6 +138,9 @@ int main(int argc, char **argv)
     fflush(stdout);
 
     if (!stay) return 0;
+    /* after the keys above: it talks to the live client through the bridge, so
+     * the client dll paths have to be readable by the time it runs */
+    init_registry_from_bridge();
     for (;;) Sleep(3600 * 1000);
     return 0;
 }

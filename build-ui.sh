@@ -50,10 +50,10 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null; then
     PRE="$APP/Contents/Resources/installer/prebuilt"
     mkdir -p "$PRE"
     x86_64-w64-mingw32-gcc -static -O2 -o "$PRE/steam.exe" \
-        "$SELF/src/steam_stub.c" -ladvapi32
+        "$SELF/src/steam_stub.c" -ladvapi32 -luser32
     command -v i686-w64-mingw32-gcc >/dev/null && \
         i686-w64-mingw32-gcc -static -O2 -o "$PRE/steam32.exe" \
-            "$SELF/src/steam_stub.c" -ladvapi32
+            "$SELF/src/steam_stub.c" -ladvapi32 -luser32
     echo "  prebuilt steam stub"
 fi
 

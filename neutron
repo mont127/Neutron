@@ -222,9 +222,9 @@ provide_stub() {
         [ -f "$SELF_DIR/prebuilt/steam32.exe" ] && cp "$SELF_DIR/prebuilt/steam32.exe" "$BIN/steam32.exe"
         note "installed prebuilt steam stub"
     elif command -v x86_64-w64-mingw32-gcc >/dev/null; then
-        x86_64-w64-mingw32-gcc -static -O2 -o "$BIN/steam.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32
+        x86_64-w64-mingw32-gcc -static -O2 -o "$BIN/steam.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32 -luser32
         command -v i686-w64-mingw32-gcc >/dev/null && \
-            i686-w64-mingw32-gcc -static -O2 -o "$BIN/steam32.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32
+            i686-w64-mingw32-gcc -static -O2 -o "$BIN/steam32.exe" "$SELF_DIR/src/steam_stub.c" -ladvapi32 -luser32
         note "built steam stub"
     else
         die "no prebuilt stub and no mingw to build one"
