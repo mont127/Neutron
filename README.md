@@ -207,7 +207,7 @@ actual work belongs to someone else.
 
 - **[MacNCheese](https://macncheese.app)** builds and maintains the unified wine
   engine Neutron ships. That is the 686 MB in the `.app`: the wine build, the
-  D3DMetal/DXMT/DXVK plumbing in `mnc-d3d`, `winemetal`, and the font, TLS,
+  /DXMT/DXVK plumbing in `mnc-d3d`, `winemetal`, and the font, TLS,
   Vulkan and SDL libraries. Without it there is no Neutron.
 - **[Wine](https://winehq.org)**, LGPL 2.1 or later, is what runs the games.
 - **[Proton](https://github.com/ValveSoftware/Proton)** is where `lsteamclient`
