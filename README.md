@@ -219,6 +219,11 @@ actual work belongs to someone else.
 - **D3DMetal** is Apple's, from the Game Porting Toolkit. It is not
   redistributable, which is why you supply your own copy.
 
+## A few other things to address.
+- AI was used in this project and simply because I haven't learnt how to code in C++ Swift nor C only in python and some shell
+- I wrote most of the python code myself at the beginning but then slowly used AI for modifying and improving the code itself.
+
+
 If you want a supported, commercially backed way to run Windows software on
 macOS, buy [CrossOver](https://www.codeweavers.com/crossover). CodeWeavers pay
 for a large share of the upstream wine work everything here depends on.
