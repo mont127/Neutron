@@ -144,12 +144,15 @@ final class Installer: ObservableObject {
     // and the installer lifts the framework and dlls out of it into the engine.
     func chooseToolkit() {
         let panel = NSOpenPanel()
-        panel.title = "Choose the Game Porting Toolkit"
-        panel.message = "Select Evaluation_environment_for_Windows_games_*.dmg"
+        panel.title = "Choose the toolkit's redist folder"
+        panel.message = "Open the Game Porting Toolkit .dmg in Finder, then choose the \"redist\" folder inside it. The .dmg itself also works."
+        panel.prompt = "Use This Folder"
+        // the folder is the documented answer, but a .dmg still opens fine
         panel.allowedFileTypes = ["dmg"]
         panel.allowsOtherFileTypes = true
         panel.canChooseDirectories = true
         panel.canChooseFiles = true
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes")
         guard panel.runModal() == .OK, let url = panel.url else { return }
         step = .working
         log = []
@@ -355,11 +358,11 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("D3DMetal is not installed")
                                     .font(.system(size: 12, weight: .medium))
-                                Text("It is Apple's and cannot be bundled. Download the Game Porting Toolkit and point Neutron at it. DXVK and DXMT work without it.")
+                                Text("It is Apple's and cannot be bundled. Download the Game Porting Toolkit from developer.apple.com, open the .dmg, and choose the \"redist\" folder inside it. DXVK and DXMT work without it.")
                                     .font(.system(size: 11)).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 HStack(spacing: 8) {
-                                    Button("Choose toolkit .dmg...") { m.chooseToolkit() }
+                                    Button("Choose redist folder...") { m.chooseToolkit() }
                                         .controlSize(.small)
                                     Button("Continue without D3DMetal") { m.skipToolkit() }
                                         .controlSize(.small)

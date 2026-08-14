@@ -462,11 +462,13 @@ stage_d3d() {
     note "staged $n graphics dlls from $(basename "$pack")"
 
     if ! d3dmetal_present "$wine"; then
-        note "D3DMetal is not installed. it is apple's and cannot be shipped, so"
-        note "download the Game Porting Toolkit ('Evaluation environment for"
-        note "Windows games') from developer.apple.com and run:"
-        note "    neutron d3dmetal /path/to/Evaluation_environment_*.dmg"
-        note "until then use the dxvk or dxmt backend."
+        note "D3DMetal is not installed. it is apple's and cannot be shipped, so:"
+        note "  1. download the Game Porting Toolkit from developer.apple.com"
+        note "     (it is called 'Evaluation environment for Windows games')"
+        note "  2. double-click the .dmg so it opens in Finder"
+        note "  3. point neutron at the 'redist' folder inside it:"
+        note "       neutron d3dmetal \"/Volumes/Evaluation environment .../redist\""
+        note "until then use the dxvk or dxmt backend, which need none of this."
     fi
 
     # dxmt caches compiled shaders per exe and keys them on its own version only,
@@ -507,8 +509,17 @@ d3dmetal_present() {
 
 cmd_d3dmetal() {
     local src="${1:-}" wine pack redist mp="" rc=0
-    [ -n "$src" ] || die "usage: neutron d3dmetal <Evaluation_environment_for_Windows_games_*.dmg | redist dir>"
-    [ -e "$src" ] || die "no such file: $src"
+    if [ -z "$src" ]; then
+        echo "usage: neutron d3dmetal <redist folder>" >&2
+        echo >&2
+        echo "  open the Game Porting Toolkit .dmg in Finder, then point this at the" >&2
+        echo "  'redist' folder inside it, or drag that folder somewhere first:" >&2
+        echo "    neutron d3dmetal \"/Volumes/Evaluation environment for Windows games 3.0/redist\"" >&2
+        echo >&2
+        echo "  the .dmg itself still works if you would rather pass that." >&2
+        exit 2
+    fi
+    [ -e "$src" ] || die "no such file or folder: $src"
     wine="$(resolve_wine)" || die "the wine engine is not available, see the lines above"
     pack="$(d3d_pack_dir "$wine")" || die "no mnc-d3d dir in the engine"
 
@@ -517,14 +528,19 @@ cmd_d3dmetal() {
         [ -n "$mp" ] || die "could not mount $src"
         redist="$mp/redist"
     else
+        # the folder itself, its parent, or the mounted volume: people pass all
+        # three, and the difference is not worth an error message
         redist="$src"
-        [ -d "$redist/lib" ] || redist="$src/redist"
+        [ -d "$redist/lib/external" ] || redist="$src/redist"
     fi
 
     local ext="$redist/lib/external" win="$redist/lib/wine/x86_64-windows"
     if [ ! -d "$ext" ] || [ ! -d "$win" ]; then
         [ -n "$mp" ] && hdiutil detach "$mp" -quiet 2>/dev/null
-        die "that does not look like the toolkit (no redist/lib/external)"
+        echo "  that does not look like the toolkit's redist folder." >&2
+        echo "  expected to find lib/external and lib/wine/x86_64-windows under:" >&2
+        echo "    $redist" >&2
+        die "point neutron at the 'redist' folder inside the Game Porting Toolkit"
     fi
 
     rm -rf "$pack/D3DMetal.framework"
@@ -1770,5 +1786,5 @@ case "${1:-}" in
     rollback)         shift; cmd_rollback "$@" ;;
     status)           shift; cmd_status "$@" ;;
     uninstall)        shift; cmd_uninstall "$@" ;;
-    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|d3dmetal <dmg>|status|update [--check]|autoupdate on|off|rollback|uninstall [--purge]}" >&2; exit 2 ;;
+    *) echo "usage: neutron {install|enable|disable|scan|scan-machine|get <appid>|enable-game <appid>|enable-all|sync|autosync on|off|apply|force <appid>|unforce <appid>|menu on|off|set <appid> k=v|adopt <appid>|unadopt <appid>|add <appid>|add-exe <name> <exe> [appid]|remove <appid>|restore|d3dmetal <redist folder>|status|update [--check]|autoupdate on|off|rollback|uninstall [--purge]}" >&2; exit 2 ;;
 esac
