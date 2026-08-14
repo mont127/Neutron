@@ -16,15 +16,16 @@ The proton mac never had.
 > [!WARNING]
 > This project is NOT a replacment for crossover.
 
-Neutron runs Windows Steam games on macOS through the native Steam client and a
-custom unified wine, so there is no Windows Steam client in the loop. A game's
+Neutron runs Windows Steam games on macOS through the native Steam client and
+MacNCheese's unified wine, so there is no Windows Steam client in the loop. A game's
 own `steam_api64.dll` talks to the real (arm64) Steam over a wine dll ported
 from Proton that loads the x86_64 slice of `steamclient.dylib`; a small stub
 `steam.exe` provides the running process the api checks for; Steam's Play button
 runs a shim that launches the game under wine.
 
-This repo is the installer. The unified wine engine is shipped separately inside
-a `.app` bundle and is not part of this source tree. The one binary here is
+This repo is the installer. The engine it ships is MacNCheese's unified wine,
+built by that project, not by this one; it travels inside the `.app` bundle and
+is not part of this source tree. The one binary here is
 `vendor/dxvk-1.10.3/x86_64/dxgi.dll`, which the DXVK backend needs.
 
 ## the policy: macOS first, Neutron for the rest
@@ -198,3 +199,26 @@ server is unaffected.
 Neutron will not ship anything that defeats, spoofs or evades VAC or any other
 anti-cheat, so this stays as it is unless Valve-signed Windows `steamclient`
 binaries become obtainable through a supported route.
+
+## built on other people's work
+
+Neutron is an installer and a launch shim. Almost everything that does the
+actual work belongs to someone else.
+
+- **[MacNCheese](https://macncheese.app)** builds and maintains the unified wine
+  engine Neutron ships. That is the 686 MB in the `.app`: the wine build, the
+  D3DMetal/DXMT/DXVK plumbing in `mnc-d3d`, `winemetal`, and the font, TLS,
+  Vulkan and SDL libraries. Without it there is no Neutron.
+- **[Wine](https://winehq.org)**, LGPL 2.1 or later, is what runs the games.
+- **[Proton](https://github.com/ValveSoftware/Proton)** is where `lsteamclient`
+  comes from. Neutron uses a macOS port of it: dylib loading instead of `.so`,
+  wine 11 path helpers, and the Steam presence signals in the `steam.exe` stub
+  are copied from Proton's `steam_helper`.
+- **[DXVK](https://github.com/doitsujin/dxvk)**, **[DXMT](https://github.com/3Shain/dxmt)**
+  and **MoltenVK** provide the graphics translation.
+- **D3DMetal** is Apple's, from the Game Porting Toolkit. It is not
+  redistributable, which is why you supply your own copy.
+
+If you want a supported, commercially backed way to run Windows software on
+macOS, buy [CrossOver](https://www.codeweavers.com/crossover). CodeWeavers pay
+for a large share of the upstream wine work everything here depends on.
